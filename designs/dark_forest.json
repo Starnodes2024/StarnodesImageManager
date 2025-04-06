@@ -1,0 +1,135 @@
+{
+  "name": "Dark Forest",
+  "version": "1.0",
+  "author": "STARNODES",
+  "colors": {
+    "window": {
+      "background": "#121a14",
+      "text": "#ffffff",
+      "border": "#1a2a1e"
+    },
+    "menuBar": {
+      "background": "#1a2a1e",
+      "text": "#ffffff",
+      "hover": "#243b2a",
+      "border": "#243b2a"
+    },
+    "toolbar": {
+      "background": "#1a2a1e",
+      "text": "#ffffff",
+      "hover": "#243b2a",
+      "border": "#243b2a"
+    },
+    "panel": {
+      "background": "#172219",
+      "text": "#ffffff",
+      "border": "#243b2a",
+      "header": "#1a2a1e"
+    },
+    "thumbnail": {
+      "background": "#1a2a1e",
+      "text": "#ffffff",
+      "textSecondary": "#cccccc",
+      "selected": "#2a5a37",
+      "selectedText": "#ffffff",
+      "border": "#243b2a",
+      "shadow": "#0a110c"
+    },
+    "button": {
+      "background": "#243b2a",
+      "text": "#ffffff",
+      "hover": "#2e4c34",
+      "pressed": "#121a14",
+      "border": "#365d42"
+    },
+    "input": {
+      "background": "#1a2a1e",
+      "text": "#ffffff",
+      "placeholder": "#aaaaaa",
+      "border": "#243b2a",
+      "focus": "#2a5a37"
+    },
+    "scrollBar": {
+      "background": "#121a14",
+      "handle": "#243b2a",
+      "handleHover": "#2e4c34"
+    },
+    "statusBar": {
+      "background": "#121a14",
+      "text": "#dddddd",
+      "border": "#1a2a1e"
+    },
+    "dialog": {
+      "background": "#172219",
+      "text": "#ffffff",
+      "border": "#243b2a",
+      "header": "#1a2a1e"
+    },
+    "progressBar": {
+      "background": "#1a2a1e",
+      "progress": "#2a5a37",
+      "text": "#ffffff"
+    },
+    "link": {
+      "text": "#4dba7a",
+      "hover": "#5eca8a",
+      "visited": "#99cc99"
+    },
+    "error": {
+      "text": "#ff6666",
+      "background": "#552222"
+    },
+    "warning": {
+      "text": "#ffaa66",
+      "background": "#553322"
+    },
+    "success": {
+      "text": "#66dd66",
+      "background": "#225522"
+    }
+  },
+  "fonts": {
+    "main": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "header": {
+      "family": "Segoe UI",
+      "size": 12,
+      "weight": "bold",
+      "style": "normal"
+    },
+    "title": {
+      "family": "Segoe UI",
+      "size": 14,
+      "weight": "bold",
+      "style": "normal"
+    },
+    "description": {
+      "family": "Segoe UI",
+      "size": 9,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "button": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "input": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "statusBar": {
+      "family": "Segoe UI",
+      "size": 9,
+      "weight": "normal",
+      "style": "normal"
+    }
+  }
+}

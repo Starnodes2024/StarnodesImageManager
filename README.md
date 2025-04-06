@@ -38,7 +38,7 @@ cd STARNODES-Image-Manager
 python setup_env.py
 
 # Start the application
-python main.py
+StartApp.bat
 ```
 
 ## Requirements
@@ -81,7 +81,7 @@ Right-click on any thumbnail to access these options:
 
 ## Customization
 
-You can customize application settings by editing the `config/settings.json` file:
+You can customize application settings by editing the `config/settings.json` file or use the settings menu:
 
 - Thumbnail size and quality
 - AI model settings

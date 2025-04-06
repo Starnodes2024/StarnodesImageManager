@@ -168,7 +168,7 @@ def main():
     def create_main_window():
         try:
             main_window = MainWindow(db_manager)
-            main_window.setWindowTitle("STARNODES Image Manager")
+            main_window.setWindowTitle("STARNODES Image Manager V0.9")
             
             # Set up key position and size
             desktop = app.primaryScreen().availableGeometry()

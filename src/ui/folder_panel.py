@@ -7,12 +7,14 @@ Displays and manages folders being monitored for images.
 
 import os
 import logging
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
     QTreeWidgetItem, QPushButton, QMenu, QMessageBox
 )
-from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QAction, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+import webbrowser
 
 logger = logging.getLogger("StarImageBrowse.ui.folder_panel")
 
@@ -42,6 +44,27 @@ class FolderPanel(QWidget):
         # Main layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Banner Image
+        app_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        banner_path = app_dir / "banner.png"
+        
+        if banner_path.exists():
+            banner_label = QLabel()
+            pixmap = QPixmap(str(banner_path))
+            scaled_pixmap = pixmap.scaled(360, 340, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            banner_label.setPixmap(scaled_pixmap)
+            banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(banner_label)
+            
+            # GitHub link
+            github_link = QLabel('<a href="https://github.com/Starnodes2024/StarnodesImageManager">Visit Github</a>')
+            github_link.setOpenExternalLinks(True)
+            github_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(github_link)
+            
+            # Add some spacing
+            layout.addSpacing(10)
         
         # Header
         header_layout = QHBoxLayout()

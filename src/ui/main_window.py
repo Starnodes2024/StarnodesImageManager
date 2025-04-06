@@ -8,6 +8,8 @@ Implements the main application window and UI components.
 import os
 import logging
 from pathlib import Path
+from datetime import datetime
+from PIL import Image, ExifTags
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QPushButton, QToolBar, QStatusBar,
@@ -141,7 +143,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager")
+        self.setWindowTitle("STARNODES Image Manager V0.9")
         self.setMinimumSize(1024, 768)
         
         # Create central widget
@@ -214,6 +216,7 @@ class MainWindow(QMainWindow):
         self.folder_panel.folder_removed.connect(self.on_folder_removed)
         
         self.search_panel.search_requested.connect(self.on_search_requested)
+        self.search_panel.date_search_requested.connect(self.on_date_search_requested)
         
         self.thumbnail_browser.thumbnail_selected.connect(self.on_thumbnail_selected)
         self.thumbnail_browser.thumbnail_double_clicked.connect(self.on_thumbnail_double_clicked)
@@ -1401,6 +1404,87 @@ class MainWindow(QMainWindow):
         
         # Process events to ensure UI updates are applied immediately
         QApplication.processEvents()
+    
+    def on_date_search_requested(self, from_date, to_date):
+        """Handle date range search request from the search panel.
+        
+        Args:
+            from_date (datetime): Start date
+            to_date (datetime): End date
+        """
+        # Update status bar
+        self.status_bar.showMessage(f"Searching images by date between {from_date.date()} and {to_date.date()}")
+        
+        # To get all images without using text search, we'll get images for each folder
+        all_images = []
+        folders = self.db_manager.get_folders(enabled_only=True)
+        
+        for folder in folders:
+            folder_id = folder.get('folder_id')
+            if folder_id is not None:
+                # Get images from this folder
+                folder_images = self.db_manager.get_images_for_folder(folder_id, limit=10000)
+                all_images.extend(folder_images)
+        
+        # Filter images by creation/modification date
+        results = []
+        for image in all_images:
+            image_path = image.get('full_path')
+            if not image_path or not os.path.exists(image_path):
+                continue
+                
+            try:
+                # Try to get the creation date from EXIF metadata first
+                image_date = None
+                try:
+                    # Open the image and extract EXIF data
+                    with Image.open(image_path) as img:
+                        if hasattr(img, '_getexif') and img._getexif():
+                            exif_data = img._getexif()
+                            # Look for the DateTimeOriginal tag (36867)
+                            for tag_id, value in exif_data.items():
+                                tag_name = ExifTags.TAGS.get(tag_id, '')
+                                if tag_name == 'DateTimeOriginal':
+                                    # EXIF date format: 'YYYY:MM:DD HH:MM:SS'
+                                    image_date = datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
+                                    break
+                except (AttributeError, ValueError, TypeError, OSError):
+                    # If any error occurs during EXIF extraction, fall back to file modification time
+                    pass
+                
+                # If no EXIF date found, fall back to file modification time
+                if not image_date:
+                    mod_time = os.path.getmtime(image_path)
+                    image_date = datetime.fromtimestamp(mod_time)
+                
+                # Check if within date range
+                if from_date <= image_date <= to_date:
+                    results.append(image)
+            except Exception as e:
+                logger.error(f"Error getting date for {image_path}: {e}")
+        
+        # Display results in thumbnail browser
+        date_range_text = f"{from_date.date()} to {to_date.date()}"
+        
+        # Set up the custom state for the thumbnail browser
+        self.thumbnail_browser.current_folder_id = None
+        self.thumbnail_browser.current_search_query = None  # Not setting search query to avoid FTS5 query
+        self.thumbnail_browser.selected_thumbnails.clear()
+        
+        # Clear the existing thumbnails
+        self.thumbnail_browser.clear_thumbnails()
+        
+        # Set custom header
+        self.thumbnail_browser.header_label.setText(f"Images by date between {date_range_text}")
+        
+        if not results:
+            # No images found
+            empty_label = QLabel(f"No images found in date range: {date_range_text}")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+        else:
+            # Add thumbnails for results directly
+            self.thumbnail_browser.add_thumbnails(results)
     
     def closeEvent(self, event):
         """Handle window close event.

@@ -27,7 +27,7 @@ STARNODES Image Manager is designed to be portable and easy to set up:
 
 1. **Download the Repository**: Clone or download this repository
 2. **Run Setup Script**: Execute `setup_env.py` to create the Python virtual environment and install dependencies
-3. **Launch the Application**: Run `main.py` to start the application
+3. **Launch the Application**: Run `main.py` to start the application or use StartApp.bat
 
 ```powershell
 # Clone the repository (or download and extract the ZIP)

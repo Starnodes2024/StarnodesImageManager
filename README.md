@@ -1,4 +1,4 @@
-# STARNODES Image Manager v0.9.1
+# STARNODES Image Manager v0.9.5
 
 A modern image browser with AI-powered description generation and search capabilities.
 
@@ -45,7 +45,7 @@ cd STARNODES-Image-Manager
 python setup_env.py
 
 # Start the application
-StartApp.bat
+python main.py
 ```
 
 ## Requirements
@@ -99,7 +99,7 @@ Right-click on any thumbnail to access these options:
 
 ## Customization
 
-You can customize application settings by editing the `config/settings.json` file or use the settings menu:
+You can customize application settings by editing the `config/settings.json` file:
 
 - Thumbnail size and quality
 - AI model settings

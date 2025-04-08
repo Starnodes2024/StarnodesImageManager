@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager V0.9")
+        self.setWindowTitle("STARNODES Image Manager V0.9.5")
         self.setMinimumSize(1024, 768)
         
         # Create menu bar if it doesn't exist

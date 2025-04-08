@@ -13,13 +13,14 @@ from PIL import Image, ExifTags
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QPushButton, QToolBar, QStatusBar,
-    QFileDialog, QMenu, QMessageBox, QApplication, QDialog
+    QFileDialog, QMenu, QMessageBox, QApplication, QDialog,
+    QInputDialog
 )
 from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool
 
 # Local imports
-from .thumbnail_browser import ThumbnailBrowser
+from .thumbnail_browser_factory import create_thumbnail_browser
 from .folder_panel import FolderPanel
 from .search_panel import SearchPanel
 from .metadata_panel import MetadataPanel
@@ -28,6 +29,7 @@ from .settings_dialog import SettingsDialog
 from .database_optimization_dialog import DatabaseOptimizationDialog
 from .worker import Worker, BackgroundTaskManager
 from .notification_manager import NotificationManager, NotificationType
+from .date_search_worker import DateSearchWorker
 
 from src.image_processing.thumbnail_generator import ThumbnailGenerator
 from src.image_processing.image_scanner import ImageScanner
@@ -35,6 +37,11 @@ from src.ai.image_processor import AIImageProcessor
 from src.config.config_manager import ConfigManager
 from src.database.db_optimization_utils import check_and_optimize_if_needed
 from src.config.theme_manager import ThemeManager
+from src.processing.batch_operations import get_batch_operations, BatchOperations
+from src.processing.task_manager import get_task_manager
+from src.processing.parallel_pipeline import get_pipeline
+from src.memory.memory_utils import initialize_memory_management, get_memory_stats, cleanup_memory_pools, force_garbage_collection, get_system_memory_info
+from src.database.performance_optimizer import DatabasePerformanceOptimizer
 
 logger = logging.getLogger("STARNODESImageManager.ui")
 
@@ -91,7 +98,8 @@ class MainWindow(QMainWindow):
         required_dirs = [
             "thumbnails",
             "logs",
-            "data"
+            "data",
+            "temp"  # Temporary files directory for processing
         ]
         
         for dir_name in required_dirs:
@@ -108,6 +116,25 @@ class MainWindow(QMainWindow):
             thumbnail_dir=thumbnails_dir,
             size=(thumb_size, thumb_size)
         )
+        
+        # Initialize memory management and parallel processing
+        try:
+            # Initialize memory management
+            initialize_memory_management(self.config_manager)
+            
+            # Initialize parallel processing pipeline
+            self.parallel_pipeline = get_pipeline("main", self.config_manager)
+            
+            # Initialize batch operations manager
+            self.batch_operations = get_batch_operations(self.config_manager, self.db_manager)
+            
+            # Connect batch operation signals
+            self._connect_batch_operation_signals()
+            
+            logger.info("Parallel processing pipeline initialized")
+        except Exception as e:
+            logger.error(f"Error initializing parallel processing: {e}")
+            # Continue with standard processing if parallel processing fails
         
         try:
             # Initialize AI processor
@@ -140,11 +167,142 @@ class MainWindow(QMainWindow):
         
         logger.info("Application components initialized")
     
+    def setup_menus(self):
+        """Set up application menus."""
+        # --- FILE MENU ---
+        file_menu = self.menuBar().addMenu("File")
+        
+        # Folder management submenu
+        folder_submenu = file_menu.addMenu("Folder Management")
+        
+        # Add folder action
+        add_folder_action = folder_submenu.addAction("Add Folder")
+        add_folder_action.triggered.connect(self.on_add_folder)
+        
+        # Remove folder action
+        remove_folder_action = folder_submenu.addAction("Remove Folder")
+        remove_folder_action.triggered.connect(self.on_remove_folder)
+        
+        # Scan folder action
+        scan_folder_action = folder_submenu.addAction("Scan Folder")
+        scan_folder_action.triggered.connect(self.on_scan_folder)
+        
+        # File operations submenu
+        file_ops_submenu = file_menu.addMenu("File Operations")
+        
+        # Export action
+        export_action = file_ops_submenu.addAction("Export Selected Images...")
+        export_action.triggered.connect(self.export_selected_images)
+        
+        # Copy to folder action
+        copy_action = file_ops_submenu.addAction("Copy Selected to Folder")
+        copy_action.triggered.connect(self.on_batch_copy_images)
+        
+        # Exit action
+        file_menu.addSeparator()
+        exit_action = file_menu.addAction("Exit")
+        exit_action.triggered.connect(self.close)
+        
+        # --- VIEW MENU ---
+        view_menu = self.menuBar().addMenu("View")
+        
+        # Show all images action
+        view_menu.addAction("Show All Images").triggered.connect(self.show_all_images)
+        
+        # --- EDIT MENU ---
+        edit_menu = self.menuBar().addMenu("Edit")
+        
+        # Rename action
+        rename_action = edit_menu.addAction("Rename Selected Images...")
+        rename_action.triggered.connect(self.rename_selected_images)
+        
+        # Delete submenu
+        delete_submenu = edit_menu.addMenu("Delete")
+        
+        # Delete from database only
+        delete_db_action = delete_submenu.addAction("Delete from Database Only")
+        delete_db_action.triggered.connect(self.on_batch_delete_images_db_only)
+        
+        # Delete from database and disk
+        delete_full_action = delete_submenu.addAction("Delete from Database and Disk")
+        delete_full_action.triggered.connect(self.on_batch_delete_images_with_files)
+        
+        # Delete descriptions
+        delete_desc_action = delete_submenu.addAction("Delete Descriptions for Selected")
+        delete_desc_action.triggered.connect(self.on_batch_delete_descriptions)
+        
+        # --- AI TOOLS MENU ---
+        ai_menu = self.menuBar().addMenu("AI Tools")
+        
+        # Generate descriptions with options dialog
+        ai_menu.addAction("Generate Descriptions with Options...").triggered.connect(self.on_generate_descriptions)
+        
+        # Generate descriptions for selected images only
+        ai_menu.addAction("Generate for Selected Images Only").triggered.connect(self.generate_descriptions_for_selected)
+        
+        # Generate descriptions for all images in folder
+        ai_menu.addAction("Generate for All Images in Folder").triggered.connect(self.generate_descriptions_for_folder)
+        
+        # --- BATCH OPERATIONS MENU ---
+        batch_menu = self.menuBar().addMenu("Batch Operations")
+        
+        # Image processing submenu
+        img_proc_submenu = batch_menu.addMenu("Image Processing")
+        
+        # Generate descriptions action
+        generate_batch_action = img_proc_submenu.addAction("Generate AI Descriptions")
+        generate_batch_action.triggered.connect(self.on_batch_generate_descriptions)
+        
+        # Export action
+        export_batch_action = img_proc_submenu.addAction("Export Images")
+        export_batch_action.triggered.connect(self.on_batch_export_images)
+        
+        # Rename action
+        rename_batch_action = img_proc_submenu.addAction("Rename Images")
+        rename_batch_action.triggered.connect(self.on_batch_rename_images)
+        
+        # File management submenu
+        file_mgmt_submenu = batch_menu.addMenu("File Management")
+        
+        # Copy to folder action
+        copy_batch_action = file_mgmt_submenu.addAction("Copy to Folder")
+        copy_batch_action.triggered.connect(self.on_batch_copy_images)
+        
+        # Delete descriptions action
+        delete_desc_batch_action = file_mgmt_submenu.addAction("Delete Descriptions")
+        delete_desc_batch_action.triggered.connect(self.on_batch_delete_descriptions)
+        
+        # Delete from database only action
+        delete_db_batch_action = file_mgmt_submenu.addAction("Delete from Database Only")
+        delete_db_batch_action.triggered.connect(self.on_batch_delete_images_db_only)
+        
+        # Delete from database and disk action
+        delete_full_batch_action = file_mgmt_submenu.addAction("Delete from Database and Disk")
+        delete_full_batch_action.triggered.connect(self.on_batch_delete_images_with_files)
+        
+        # --- TOOLS MENU ---
+        tools_menu = self.menuBar().addMenu("Tools")
+        
+        # Database submenu
+        db_submenu = tools_menu.addMenu("Database")
+        
+        # Optimize database action
+        optimize_db_action = db_submenu.addAction("Optimize & Repair Database")
+        optimize_db_action.triggered.connect(self.on_optimize_database)
+        
+        # Settings action
+        tools_menu.addSeparator()
+        settings_action = tools_menu.addAction("Settings")
+        settings_action.triggered.connect(self.on_settings)
+    
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
         self.setWindowTitle("STARNODES Image Manager V0.9")
         self.setMinimumSize(1024, 768)
+        
+        # Create menu bar if it doesn't exist
+        self.setup_menus()
         
         # Create central widget
         self.central_widget = QWidget(self)
@@ -153,9 +311,6 @@ class MainWindow(QMainWindow):
         # Main layout
         main_layout = QVBoxLayout(self.central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Create toolbar
-        self.create_toolbar()
         
         # Create splitter for main content
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -186,8 +341,8 @@ class MainWindow(QMainWindow):
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
         right_layout.addWidget(self.right_splitter)
         
-        # Thumbnail browser
-        self.thumbnail_browser = ThumbnailBrowser(self.db_manager)
+        # Thumbnail browser - use factory to create appropriate implementation
+        self.thumbnail_browser = create_thumbnail_browser(self.db_manager, self.config_manager)
         self.right_splitter.addWidget(self.thumbnail_browser)
         
         # Metadata panel
@@ -220,106 +375,15 @@ class MainWindow(QMainWindow):
         
         self.thumbnail_browser.thumbnail_selected.connect(self.on_thumbnail_selected)
         self.thumbnail_browser.thumbnail_double_clicked.connect(self.on_thumbnail_double_clicked)
-        self.thumbnail_browser.batch_generate_requested.connect(self.on_batch_generate_from_context_menu)
+        self.thumbnail_browser.batch_generate_requested.connect(self.on_batch_generate_descriptions)
         self.thumbnail_browser.status_message.connect(self.status_bar.showMessage)
         
         logger.info("Main window UI setup complete")
     
     def create_toolbar(self):
-        """Create the main toolbar."""
-        self.toolbar = QToolBar("Main Toolbar")
-        self.toolbar.setMovable(False)
-        self.toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(self.toolbar)
-        
-        # Add folder action
-        add_folder_action = QAction("Add Folder", self)
-        add_folder_action.setStatusTip("Add a folder to monitor for images")
-        add_folder_action.triggered.connect(self.on_add_folder)
-        self.toolbar.addAction(add_folder_action)
-        
-        # Remove folder action
-        remove_folder_action = QAction("Remove Folder", self)
-        remove_folder_action.setStatusTip("Remove a folder from monitoring")
-        remove_folder_action.triggered.connect(self.on_remove_folder)
-        self.toolbar.addAction(remove_folder_action)
-        
-        self.toolbar.addSeparator()
-        
-        # Scan folder action
-        scan_folder_action = QAction("Scan Folder", self)
-        scan_folder_action.setStatusTip("Scan the selected folder for new images")
-        scan_folder_action.triggered.connect(self.on_scan_folder)
-        self.toolbar.addAction(scan_folder_action)
-        
-        # Generate descriptions action
-        generate_descriptions_action = QAction("Generate Descriptions", self)
-        generate_descriptions_action.setStatusTip("Generate AI descriptions for images in the selected folder")
-        generate_descriptions_action.triggered.connect(self.on_generate_descriptions)
-        self.toolbar.addAction(generate_descriptions_action)
-        
-        self.toolbar.addSeparator()
-        
-        # Batch operations menu
-        self.batch_menu = QMenu("Batch Operations", self)
-        batch_action = QAction("Batch Operations", self)
-        batch_action.setStatusTip("Perform operations on multiple selected images")
-        batch_action.setMenu(self.batch_menu)
-        self.toolbar.addAction(batch_action)
-        
-        # Tools menu
-        self.tools_menu = QMenu("Tools", self)
-        tools_action = QAction("Tools", self)
-        tools_action.setStatusTip("Additional tools and utilities")
-        tools_action.setMenu(self.tools_menu)
-        self.toolbar.addAction(tools_action)
-        
-        # Add database optimization action (now also handles repair)
-        optimize_db_action = QAction("Optimize & Repair Database", self)
-        optimize_db_action.setStatusTip("Optimize and repair the database for better performance and reliability")
-        optimize_db_action.triggered.connect(self.on_optimize_database)
-        self.tools_menu.addAction(optimize_db_action)
-        
-        # Add batch operations
-        self.batch_generate_action = QAction("Generate Descriptions for Selected", self)
-        self.batch_generate_action.setStatusTip("Generate AI descriptions for selected images")
-        self.batch_generate_action.triggered.connect(self.on_batch_generate_descriptions)
-        self.batch_menu.addAction(self.batch_generate_action)
-        
-        self.batch_export_action = QAction("Export Selected Images", self)
-        self.batch_export_action.setStatusTip("Export selected images to a folder")
-        self.batch_export_action.triggered.connect(self.on_batch_export_images)
-        self.batch_menu.addAction(self.batch_export_action)
-        
-        self.batch_rename_action = QAction("Rename Selected Images", self)
-        self.batch_rename_action.setStatusTip("Rename selected images with a pattern")
-        self.batch_rename_action.triggered.connect(self.on_batch_rename_images)
-        self.batch_menu.addAction(self.batch_rename_action)
-        
-        self.batch_menu.addSeparator()
-        
-        self.batch_copy_action = QAction("Copy Selected to Folder", self)
-        self.batch_copy_action.setStatusTip("Copy selected images to a folder")
-        self.batch_copy_action.triggered.connect(self.on_batch_copy_images)
-        self.batch_menu.addAction(self.batch_copy_action)
-        
-        self.batch_delete_desc_action = QAction("Delete Descriptions for Selected", self)
-        self.batch_delete_desc_action.setStatusTip("Delete descriptions for selected images")
-        self.batch_delete_desc_action.triggered.connect(self.on_batch_delete_descriptions)
-        self.batch_menu.addAction(self.batch_delete_desc_action)
-        
-        self.batch_delete_action = QAction("Delete Selected Images", self)
-        self.batch_delete_action.setStatusTip("Delete selected images")
-        self.batch_delete_action.triggered.connect(self.on_batch_delete_images)
-        self.batch_menu.addAction(self.batch_delete_action)
-        
-        self.toolbar.addSeparator()
-        
-        # Settings action
-        settings_action = QAction("Settings", self)
-        settings_action.setStatusTip("Open application settings")
-        settings_action.triggered.connect(self.on_settings)
-        self.toolbar.addAction(settings_action)
+        """Create the main toolbar - empty as we're using only the top menu bar."""
+        # Toolbar has been removed to avoid redundancy with the top menu bar
+        pass
     
     def on_add_folder(self):
         """Handle the Add Folder action."""
@@ -705,11 +769,23 @@ class MainWindow(QMainWindow):
             folder_id (int): ID of the selected folder
             folder_path (str): Path of the selected folder
         """
+        # Special case for All Images (-1)
+        if folder_id == -1:
+            # Update status bar
+            self.status_bar.showMessage("Viewing all images")
+            
+            # Show all images from all folders
+            self.show_all_images()
+            return
+        
         # Update status bar
         self.status_bar.showMessage(f"Selected folder: {folder_path}")
         
         # Update thumbnail browser with images from the selected folder
         self.thumbnail_browser.set_folder(folder_id)
+        
+        # Store the current folder ID for search context
+        self.current_folder_id = folder_id
     
     def on_folder_removed(self, folder_id):
         """Handle folder removal from the folder panel.
@@ -722,17 +798,156 @@ class MainWindow(QMainWindow):
             self.thumbnail_browser.clear_thumbnails()
             self.status_bar.showMessage("Folder removed")
     
+    def show_all_images(self):
+        """Show all images from all folders using an optimized database query."""
+        # Clear the current folder selection
+        self.current_folder_id = None
+        self.thumbnail_browser.current_folder_id = None
+        self.thumbnail_browser.current_search_query = None
+        
+        # Clear existing thumbnails
+        self.thumbnail_browser.clear_thumbnails()
+        
+        # Set header
+        self.thumbnail_browser.header_label.setText("All Images (Loading...)")
+        self.status_bar.showMessage("Loading all images...")
+        
+        # Show loading message - handle both browser types
+        loading_label = QLabel("Loading all images...")
+        loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Check which type of browser we're using
+        if hasattr(self.thumbnail_browser, 'grid_layout'):
+            # Traditional thumbnail browser
+            self.thumbnail_browser.grid_layout.addWidget(loading_label, 0, 0)
+        else:
+            # Virtualized thumbnail browser - update the header only
+            # (virtualized browser doesn't have a grid_layout)
+            pass
+            
+        QApplication.processEvents()  # Update UI
+        
+        # Create a worker to load all images in the background using the optimized method
+        worker = Worker(self.load_all_images_worker)
+        
+        # Connect signals
+        worker.signals.result.connect(self.on_all_images_loaded)
+        worker.signals.error.connect(self.on_all_images_error)
+        
+        # Start the worker
+        self.status_bar.showMessage("Loading all images in background...")
+        QThreadPool.globalInstance().start(worker)
+    
+    def load_all_images_worker(self, progress_callback=None):
+        """Worker function to load all images using the optimized database query.
+        
+        Args:
+            progress_callback (function, optional): Callback for progress updates
+            
+        Returns:
+            list: List of all images
+        """
+        try:
+            # Get image count first (for UI feedback)
+            folders = self.db_manager.get_folders(enabled_only=True)
+            
+            if not folders:
+                return []
+            
+            # Use the optimized database query to get all images in one go
+            # This is much more efficient than loading from each folder separately
+            # With virtualized grid, we can safely load many more images at once
+            all_images = self.db_manager.get_all_images(limit=100000)
+            return all_images
+            
+        except Exception as e:
+            logger.error(f"Error loading all images: {e}")
+            return []
+    
+    def on_all_images_loaded(self, all_images):
+        """Handle completion of all images loading.
+        
+        Args:
+            all_images (list): List of all images loaded
+        """
+        # Check if we're using traditional or virtualized browser
+        if hasattr(self.thumbnail_browser, 'grid_layout'):
+            # Traditional browser - clear any loading widgets
+            for i in reversed(range(self.thumbnail_browser.grid_layout.count())): 
+                widget = self.thumbnail_browser.grid_layout.itemAt(i).widget()
+                if widget is not None and isinstance(widget, QLabel):
+                    widget.setParent(None)
+                    widget.deleteLater()
+        
+        if not all_images:
+            # No images found
+            if hasattr(self.thumbnail_browser, 'grid_layout'):
+                # Traditional browser - show empty message
+                empty_label = QLabel("No images found in any folder")
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+            self.status_bar.showMessage("No images found")
+            return
+        
+        # Update header with count
+        self.thumbnail_browser.header_label.setText(f"All Images ({len(all_images)})")
+        
+        # Add thumbnails to browser (using the optimized method that supports pagination)
+        self.thumbnail_browser.add_thumbnails(all_images)
+        self.status_bar.showMessage(f"Loaded {len(all_images)} images from all folders")
+    
+    def on_all_images_error(self, error):
+        """Handle errors in all images loading.
+        
+        Args:
+            error (tuple): (error_type, error_message)
+        """
+        error_type, error_message = error
+        logger.error(f"Error loading all images: {error_type}: {error_message}")
+        self.status_bar.showMessage(f"Error loading images: {error_message}")
+        self.thumbnail_browser.header_label.setText("All Images (Error Loading)")
+    
     def on_search_requested(self, query):
         """Handle search request from the search panel.
         
         Args:
             query (str): Search query
         """
-        # Update status bar
-        self.status_bar.showMessage(f"Searching for: {query}")
+        # Get the current folder ID (could be None for "All Images")
+        folder_id = getattr(self, 'current_folder_id', None)
         
-        # Update thumbnail browser with search results
-        self.thumbnail_browser.search(query)
+        # If we have a specific folder selected, search only within that folder
+        if folder_id is not None and folder_id != -1:
+            folder_info = next((f for f in self.db_manager.get_folders() if f["folder_id"] == folder_id), None)
+            folder_name = folder_info.get("path", "Unknown") if folder_info else "Unknown"
+            
+            # Update status bar
+            self.status_bar.showMessage(f"Searching for: {query} in folder: {folder_name}")
+            
+            # Clear thumbnails
+            self.thumbnail_browser.clear_thumbnails()
+            
+            # Set header
+            self.thumbnail_browser.header_label.setText(f"Search results for: {query} in folder: {os.path.basename(folder_name)}")
+            
+            # Search only within this folder
+            images = self.db_manager.search_images_in_folder(folder_id, query, limit=1000)
+            
+            if not images:
+                # No images found
+                empty_label = QLabel(f"No images found for query: {query} in this folder")
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+                return
+            
+            # Add thumbnails
+            self.thumbnail_browser.add_thumbnails(images)
+        else:
+            # Update status bar for global search
+            self.status_bar.showMessage(f"Searching for: {query} across all folders")
+            
+            # Search across all folders
+            self.thumbnail_browser.search(query)
         
     def on_thumbnail_selected(self, image_id):
         """Handle thumbnail selection event.
@@ -781,12 +996,22 @@ class MainWindow(QMainWindow):
             image_ids (list, optional): List of specific image IDs to process. If None,
                                         uses currently selected thumbnails.
         """
-        # If image_ids is not provided, get selected images from the thumbnail browser
-        if image_ids is None:
+        # If image_ids is not provided or is not a list, get selected images from the thumbnail browser
+        if image_ids is None or not isinstance(image_ids, list):
+            # Log the issue if it's not None but also not a list (helps with debugging)
+            if image_ids is not None and not isinstance(image_ids, list):
+                logger.warning(f"Invalid image_ids type received: {type(image_ids)}. Using selected thumbnails instead.")
+                
             if not hasattr(self.thumbnail_browser, 'selected_thumbnails') or not self.thumbnail_browser.selected_thumbnails:
                 QMessageBox.information(self, "No Images Selected", "Please select one or more images first.")
                 return
-            image_ids = list(self.thumbnail_browser.selected_thumbnails)
+            image_ids = self.thumbnail_browser.selected_thumbnails 
+            # print(f"Selected image IDs from main_window: {image_ids}") # Debug print
+
+        # Ensure we have a valid list
+        if not image_ids:
+            QMessageBox.information(self, "No Images Selected", "Please select one or more images first.")
+            return
             
         num_selected = len(image_ids)
         
@@ -993,6 +1218,7 @@ class MainWindow(QMainWindow):
             f"Renaming {num_selected} selected images...",
             self
         )
+        progress_dialog.log_message(f"Starting rename operation with pattern: {pattern}")
         
         # Define progress callback
         def progress_callback(current, total, message=None):
@@ -1043,14 +1269,23 @@ class MainWindow(QMainWindow):
         def rename_images_task(image_ids, pattern, progress_callback=None):
             import os
             import shutil
+            import time
             
             results = {
                 "success": 0,
                 "failed": 0,
+                "skipped": 0,
+                "cleaned": 0,  # Count of database entries cleaned up for missing files
                 "renamed_files": []
             }
             
             total = len(image_ids)
+            start_time = time.time()
+            
+            # Log start of operation
+            logger.info(f"Starting batch rename of {total} images with pattern '{pattern}'")
+            if progress_callback:
+                progress_callback(0, total, f"Starting rename operation on {total} images")
             
             for i, image_id in enumerate(image_ids):
                 try:
@@ -1058,40 +1293,157 @@ class MainWindow(QMainWindow):
                     image_info = self.db_manager.get_image_by_id(image_id)
                     
                     if not image_info:
+                        logger.warning(f"Image ID {image_id} not found in database")
                         results["failed"] += 1
+                        if progress_callback:
+                            progress_callback(i + 1, total, f"Error: Image ID {image_id} not found")
                         continue
                     
+                    # Normalize the source path to handle mixed slash types
                     source_path = image_info["full_path"]
+                    source_path = os.path.normpath(source_path)
+                    
+                    # Debug info to help diagnose issues
+                    logger.debug(f"Processing image: ID={image_id}, Path={source_path}")
+                    logger.debug(f"File exists check: {os.path.exists(source_path)}")
+                    
+                    # Advanced file existence checks
+                    # Extract directory and filename
+                    dir_path = os.path.dirname(source_path)
+                    base_filename = os.path.basename(source_path)
+                    
+                    # Check 1: Does the directory exist?
+                    if not os.path.exists(dir_path):
+                        logger.warning(f"Directory does not exist: {dir_path}")
+                    else:
+                        logger.debug(f"Directory exists: {dir_path}")
+                        
+                        # Check 2: List files in directory to see if our file exists with a slightly different name
+                        try:
+                            files_in_dir = os.listdir(dir_path)
+                            logger.debug(f"Files in directory ({len(files_in_dir)} files): {files_in_dir[:10]}{'...' if len(files_in_dir) > 10 else ''}")
+                            
+                            # Look for similar filenames
+                            timestamp_part = None
+                            if 'Screenshot' in base_filename and ' ' in base_filename:
+                                # Extract timestamp part for matching
+                                parts = base_filename.split(' ')
+                                if len(parts) > 1:
+                                    timestamp_part = parts[1].split('.')[0]  # Get the timestamp without extension
+                            
+                            if timestamp_part:
+                                logger.debug(f"Looking for files matching timestamp: {timestamp_part}")
+                                similar_files = [f for f in files_in_dir if timestamp_part in f]
+                                if similar_files:
+                                    logger.debug(f"Found similar files: {similar_files}")
+                                    # If we found a match, use it instead
+                                    if len(similar_files) == 1:
+                                        new_path = os.path.join(dir_path, similar_files[0])
+                                        logger.debug(f"Using similar file instead: {new_path}")
+                                        source_path = new_path
+                            
+                        except Exception as e:
+                            logger.error(f"Error listing directory: {e}")
+                    
+                    # Try additional path fixing if needed
                     if not os.path.exists(source_path):
+                        # Try alternate normalization
+                        alt_path = source_path.replace('\\', '/')
+                        logger.debug(f"Trying alternate path: {alt_path}")
+                        
+                        if os.path.exists(alt_path):
+                            source_path = alt_path
+                            logger.debug(f"Using alternate path instead: {source_path}")
+                    
+                    if not os.path.exists(source_path):
+                        logger.warning(f"Source file not found: {source_path}")
+                        
+                        # Get more information about the file from the database for debugging
+                        detailed_info = self.db_manager.get_image_by_id(image_id)
+                        logger.debug(f"Database record details: {detailed_info}")
+                        
+                        # Ask user if they want to remove this entry from the database
+                        from PyQt6.QtWidgets import QMessageBox
+                        msg_box = QMessageBox()
+                        msg_box.setIcon(QMessageBox.Icon.Question)
+                        msg_box.setText(f"File not found: {os.path.basename(source_path)}")
+                        msg_box.setInformativeText("Do you want to remove this missing file from the database?")
+                        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.YesToAll | QMessageBox.StandardButton.NoToAll)
+                        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+                        
+                        # Use a class variable to remember user's choice for YesToAll/NoToAll
+                        if not hasattr(self, '_clean_missing_files_choice'):
+                            self._clean_missing_files_choice = None
+                            
+                        if self._clean_missing_files_choice == 'always':
+                            # Automatically remove the file
+                            self.db_manager.delete_image(image_id)
+                            logger.info(f"Removed missing file from database: ID={image_id}, Path={source_path}")
+                            results["cleaned"] = results.get("cleaned", 0) + 1
+                        elif self._clean_missing_files_choice == 'never':
+                            # Skip without asking
+                            pass
+                        else:
+                            # Ask user
+                            response = msg_box.exec()
+                            
+                            if response == QMessageBox.StandardButton.YesToAll:
+                                self._clean_missing_files_choice = 'always'
+                                self.db_manager.delete_image(image_id)
+                                logger.info(f"Removed missing file from database: ID={image_id}, Path={source_path}")
+                                results["cleaned"] = results.get("cleaned", 0) + 1
+                            elif response == QMessageBox.StandardButton.NoToAll:
+                                self._clean_missing_files_choice = 'never'
+                            elif response == QMessageBox.StandardButton.Yes:
+                                self.db_manager.delete_image(image_id)
+                                logger.info(f"Removed missing file from database: ID={image_id}, Path={source_path}")
+                                results["cleaned"] = results.get("cleaned", 0) + 1
+                        
                         results["failed"] += 1
+                        if progress_callback:
+                            progress_callback(i + 1, total, f"Error: Source file not found: {os.path.basename(source_path)}")
                         continue
                     
                     # Get directory and extension
                     directory = os.path.dirname(source_path)
-                    _, ext = os.path.splitext(source_path)
+                    filename = os.path.basename(source_path)
+                    name, ext = os.path.splitext(filename)
                     
                     # Create new filename based on pattern
-                    new_filename = pattern.replace("{n}", str(i + 1)).replace("{ext}", ext[1:]) + ext
+                    # Use both sequential number and image ID for more flexibility
+                    new_filename = pattern.replace("{n}", str(i + 1))
+                    new_filename = new_filename.replace("{id}", str(image_id))
+                    new_filename = new_filename.replace("{ext}", ext[1:]) + ext
+                    
                     dest_path = os.path.join(directory, new_filename)
                     
                     # Check if destination already exists
                     counter = 1
+                    orig_new_filename = new_filename
                     while os.path.exists(dest_path) and dest_path != source_path:
-                        new_filename = pattern.replace("{n}", f"{i + 1}_{counter}").replace("{ext}", ext[1:]) + ext
+                        new_filename = orig_new_filename.replace(ext, f"_{counter}{ext}")
                         dest_path = os.path.join(directory, new_filename)
                         counter += 1
+                        # Prevent infinite loop
+                        if counter > 100:
+                            raise ValueError("Too many name conflicts, cannot create unique filename")
                     
                     # Skip if source and destination are the same
                     if dest_path == source_path:
+                        logger.info(f"Skipping file (already has target name): {source_path}")
+                        results["skipped"] += 1
                         if progress_callback:
                             progress_callback(i + 1, total, f"Skipped: {os.path.basename(source_path)} (already named correctly)")
                         continue
                     
                     # Rename the file
+                    logger.debug(f"Renaming {source_path} to {dest_path}")
                     shutil.move(source_path, dest_path)
                     
-                    # Update database with new path
-                    self.db_manager.update_image_path(image_id, dest_path, new_filename)
+                    # Update database with new path - note the parameter order: ID, filename, path
+                    update_result = self.db_manager.update_image_path(image_id, new_filename, dest_path)
+                    if not update_result:
+                        logger.warning(f"Database update failed for image {image_id}")
                     
                     results["success"] += 1
                     results["renamed_files"].append(dest_path)
@@ -1107,6 +1459,10 @@ class MainWindow(QMainWindow):
                     # Update progress with error info
                     if progress_callback:
                         progress_callback(i + 1, total, f"Error renaming image ID {image_id}: {str(e)}")
+            
+            # Log completion
+            elapsed_time = time.time() - start_time
+            logger.info(f"Batch rename completed in {elapsed_time:.2f}s: {results['success']} succeeded, {results['failed']} failed, {results['skipped']} skipped, {results.get('cleaned', 0)} database entries cleaned")
             
             return results
         
@@ -1132,9 +1488,57 @@ class MainWindow(QMainWindow):
         self.thumbnail_browser.delete_selected_descriptions()
     
     def on_batch_delete_images(self):
-        """Delete selected images."""
-        # Delegate to the thumbnail browser's delete images function
-        self.thumbnail_browser.delete_selected_images()
+        """Delete selected images (legacy method)."""
+        # Delegate to the thumbnail browser's delete images function (database only for backward compatibility)
+        self.thumbnail_browser.delete_selected_images(delete_from_disk=False)
+        
+    def on_batch_delete_images_db_only(self):
+        """Delete selected images from database only."""
+        # Delegate to the thumbnail browser's delete images function with delete_from_disk=False
+        self.thumbnail_browser.delete_selected_images(delete_from_disk=False)
+    
+    def on_batch_delete_images_with_files(self):
+        """Delete selected images from both database and disk."""
+        # Delegate to the thumbnail browser's delete images function with delete_from_disk=True
+        self.thumbnail_browser.delete_selected_images(delete_from_disk=True)
+    
+    def toggle_virtualized_grid(self, enabled):
+        """Toggle virtualized grid option.
+        
+        Args:
+            enabled (bool): Whether to enable virtualized grid
+        """
+        # Save setting
+        self.config_manager.set("performance", "use_virtualized_grid", enabled)
+        
+        # Get current image count to provide context
+        image_count = self.db_manager.get_image_count()
+        
+        # Determine appropriate notification message based on image count
+        status_message = "Virtualized grid " + ("enabled" if enabled else "disabled") + " (restart required)"
+        self.status_bar.showMessage(status_message)
+        
+        # Additional details for the dialog
+        details = ""
+        if enabled:
+            details = (
+                "The virtualized grid will provide better performance for large collections by only rendering visible thumbnails. "
+                f"Your collection currently has {image_count} images. "
+                f"The virtualized grid is {'recommended' if image_count > 1000 else 'optional'} for your collection size."
+            )
+        else:
+            details = (
+                "Standard grid will be used. This is suitable for smaller collections but may slow down with larger image sets. "
+                f"Your collection currently has {image_count} images. "
+                f"The virtualized grid is {'recommended' if image_count > 1000 else 'optional'} for your collection size."
+            )
+        
+        # Show restart dialog
+        QMessageBox.information(
+            self,
+            "Restart Required",
+            f"The virtualized grid setting has been changed. {details}\n\nPlease restart the application for the change to take effect."
+        )
     
     def on_optimize_database(self):
         """Open the database optimization dialog."""
@@ -1415,76 +1819,136 @@ class MainWindow(QMainWindow):
         # Update status bar
         self.status_bar.showMessage(f"Searching images by date between {from_date.date()} and {to_date.date()}")
         
-        # To get all images without using text search, we'll get images for each folder
-        all_images = []
-        folders = self.db_manager.get_folders(enabled_only=True)
-        
-        for folder in folders:
-            folder_id = folder.get('folder_id')
-            if folder_id is not None:
-                # Get images from this folder
-                folder_images = self.db_manager.get_images_for_folder(folder_id, limit=10000)
-                all_images.extend(folder_images)
-        
-        # Filter images by creation/modification date
-        results = []
-        for image in all_images:
-            image_path = image.get('full_path')
-            if not image_path or not os.path.exists(image_path):
-                continue
-                
-            try:
-                # Try to get the creation date from EXIF metadata first
-                image_date = None
-                try:
-                    # Open the image and extract EXIF data
-                    with Image.open(image_path) as img:
-                        if hasattr(img, '_getexif') and img._getexif():
-                            exif_data = img._getexif()
-                            # Look for the DateTimeOriginal tag (36867)
-                            for tag_id, value in exif_data.items():
-                                tag_name = ExifTags.TAGS.get(tag_id, '')
-                                if tag_name == 'DateTimeOriginal':
-                                    # EXIF date format: 'YYYY:MM:DD HH:MM:SS'
-                                    image_date = datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
-                                    break
-                except (AttributeError, ValueError, TypeError, OSError):
-                    # If any error occurs during EXIF extraction, fall back to file modification time
-                    pass
-                
-                # If no EXIF date found, fall back to file modification time
-                if not image_date:
-                    mod_time = os.path.getmtime(image_path)
-                    image_date = datetime.fromtimestamp(mod_time)
-                
-                # Check if within date range
-                if from_date <= image_date <= to_date:
-                    results.append(image)
-            except Exception as e:
-                logger.error(f"Error getting date for {image_path}: {e}")
-        
-        # Display results in thumbnail browser
-        date_range_text = f"{from_date.date()} to {to_date.date()}"
-        
-        # Set up the custom state for the thumbnail browser
-        self.thumbnail_browser.current_folder_id = None
-        self.thumbnail_browser.current_search_query = None  # Not setting search query to avoid FTS5 query
-        self.thumbnail_browser.selected_thumbnails.clear()
-        
-        # Clear the existing thumbnails
+        # Show searching message in thumbnail browser
         self.thumbnail_browser.clear_thumbnails()
         
-        # Set custom header
-        self.thumbnail_browser.header_label.setText(f"Images by date between {date_range_text}")
+        # Custom header for search in progress
+        date_range_text = f"{from_date.date()} to {to_date.date()}"
+        self.thumbnail_browser.header_label.setText(f"Searching for images between {date_range_text}...")
         
-        if not results:
-            # No images found
-            empty_label = QLabel(f"No images found in date range: {date_range_text}")
-            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
-        else:
-            # Add thumbnails for results directly
-            self.thumbnail_browser.add_thumbnails(results)
+        # Create a progress dialog
+        progress_dialog = ProgressDialog(
+            "Date Search",
+            f"Searching for images between {date_range_text}...",
+            self,
+            cancellable=True
+        )
+        
+        # Create the search worker
+        search_worker = DateSearchWorker(self.db_manager, from_date, to_date)
+        
+        # Connect signals
+        def progress_callback(current, total, message=None):
+            try:
+                if progress_dialog and progress_dialog.isVisible():
+                    # Avoid updating the progress if the dialog has been completed or cancellation already requested
+                    if progress_dialog.is_complete or progress_dialog.user_cancelled:
+                        return
+                        
+                    # Update the progress normally
+                    progress_dialog.update_progress(current, total)
+                    
+                    # Only update operation message if one was provided
+                    if message:
+                        progress_dialog.update_operation(message)
+                        logger.debug(f"Date search progress: {current}/{total} - {message}")
+            except Exception as e:
+                logger.error(f"Error in date search progress callback: {e}")
+        
+        def on_search_complete(results):
+            try:
+                # First handle updating the thumbnail browser with results
+                logger.debug(f"Date search completed with {len(results)} results")
+                
+                if progress_dialog and progress_dialog.isVisible():
+                    # Mark the dialog as completed
+                    progress_dialog.update_operation(f"Found {len(results)} images in date range")
+                    progress_dialog.update_progress(100, 100)
+                    # Force the dialog to close and clean up properly
+                    progress_dialog.is_complete = True
+                    progress_dialog.accept()
+                
+                # Set up the custom state for the thumbnail browser
+                self.thumbnail_browser.current_folder_id = None
+                self.thumbnail_browser.current_search_query = None  # Not setting search query to avoid FTS5 query
+                self.thumbnail_browser.selected_thumbnails.clear()
+                
+                # Clear the existing thumbnails
+                self.thumbnail_browser.clear_thumbnails()
+                
+                # Set custom header
+                self.thumbnail_browser.header_label.setText(f"Images by date between {date_range_text} ({len(results)} found)")
+                
+                if not results:
+                    # No images found
+                    empty_label = QLabel(f"No images found in date range: {date_range_text}")
+                    empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+                else:
+                    # Add thumbnails for results directly
+                    self.thumbnail_browser.add_thumbnails(results)
+                    
+                # Update status bar
+                self.status_bar.showMessage(f"Found {len(results)} images between {date_range_text}")
+                
+            except Exception as e:
+                logger.error(f"Error handling date search results: {e}")
+                if progress_dialog and progress_dialog.isVisible():
+                    progress_dialog.close()
+        
+        def on_search_error(error_msg):
+            try:
+                logger.error(f"Date search error: {error_msg}")
+                
+                if progress_dialog and progress_dialog.isVisible():
+                    progress_dialog.log_message(f"Error during search: {error_msg}")
+                    progress_dialog.close_when_finished()
+                
+                # Show error in thumbnail browser
+                self.thumbnail_browser.clear_thumbnails()
+                self.thumbnail_browser.header_label.setText(f"Error searching for images: {error_msg}")
+                
+                # Update status bar
+                self.status_bar.showMessage(f"Error during date search: {error_msg}")
+                
+            except Exception as e:
+                logger.error(f"Error in date search error handler: {e}")
+                if progress_dialog and progress_dialog.isVisible():
+                    progress_dialog.close()
+        
+        def on_cancel():
+            try:
+                # Cancel the worker
+                search_worker.cancel()
+                self.status_bar.showMessage("Date search cancelled")
+                self.thumbnail_browser.header_label.setText("Date search cancelled")
+            except Exception as e:
+                logger.error(f"Error cancelling date search: {e}")
+        
+        # Connect signals
+        search_worker.signals.progress.connect(progress_callback)
+        search_worker.signals.finished.connect(on_search_complete)
+        search_worker.signals.error.connect(on_search_error)
+        
+        # Connect progress dialog's cancel signal to our handler
+        # This ensures we handle cancellation requests properly
+        if progress_dialog.cancellable:
+            progress_dialog.cancelled.connect(on_cancel)
+            
+        # Ensure we can properly close the dialog regardless of state
+        progress_dialog.setModal(False)  # Allow interaction with main window
+        
+        # Show progress dialog first so it's visible before starting the worker
+        progress_dialog.show()
+        
+        # Process events to ensure dialog is fully displayed
+        QApplication.processEvents()
+        
+        # Add additional logging
+        logger.debug("Starting date search worker thread")
+        
+        # Start the worker
+        self.threadpool.start(search_worker)
     
     def closeEvent(self, event):
         """Handle window close event.
@@ -1504,3 +1968,427 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error in closeEvent: {e}")
             event.accept()
+            
+    def generate_descriptions_for_selected(self):
+        """Generate AI descriptions for selected images."""
+        # Get selected images
+        selected_images = list(self.thumbnail_browser.selected_thumbnails)
+        
+        if not selected_images:
+            self.notification_manager.show_notification(
+                "No Images Selected",
+                "Please select one or more images to generate descriptions."
+            )
+            return
+        
+        # Initialize batch processor if not already initialized
+        if not hasattr(self, 'batch_processor'):
+            from src.ai.batch_processor import BatchProcessor
+            from src.ai.image_processor import AIImageProcessor
+            
+            # Create AI processor
+            ai_processor = AIImageProcessor(self.db_manager)
+            self.batch_processor = BatchProcessor(ai_processor, self.db_manager)
+        
+        # Create progress dialog
+        progress_dialog = ProgressDialog("Generating Descriptions", "Preparing images...", parent=self)
+        progress_dialog.setModal(True)
+        progress_dialog.show()
+        
+        # Get image IDs
+        image_ids = selected_images
+        
+        # Create worker
+        worker = Worker(
+            self.batch_processor.process_selected_images,
+            image_ids=image_ids,
+            progress_callback=lambda current, total, message: progress_dialog.update_progress(current, total, message)
+        )
+        
+        def on_complete(result):
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show completion notification
+            if result.get("cancelled", False):
+                self.notification_manager.show_notification(
+                    "Operation Cancelled",
+                    f"Processing cancelled. {result.get('processed', 0)} images processed."
+                )
+            else:
+                self.notification_manager.show_notification(
+                    "Generation Complete",
+                    f"Processed: {result.get('processed', 0)}, " \
+                    f"Failed: {result.get('failed', 0)}"
+                )
+            
+            # Refresh the current view to show updated descriptions
+            if hasattr(self, 'current_folder_id') and self.current_folder_id is not None:
+                self.on_folder_selected(self.current_folder_id, None)
+            else:
+                self.show_all_images()
+        
+        def on_error(error):
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show error notification
+            self.notification_manager.show_notification(
+                "Error Generating Descriptions",
+                f"An error occurred: {str(error)}"
+            )
+        
+        def on_cancel():
+            # Cancel the batch processing
+            self.batch_processor.cancel_processing()
+            self.status_bar.showMessage("Cancelling batch processing...")
+        
+        # Connect signals - Fix: connect on_complete to result signal, not finished signal
+        worker.signals.result.connect(on_complete)
+        worker.signals.error.connect(on_error)
+        
+        # Connect cancel button
+        if progress_dialog.cancel_button:
+            progress_dialog.cancel_button.clicked.connect(on_cancel)
+        
+        # Start processing
+        self.threadpool.start(worker)
+        
+    def generate_descriptions_for_folder(self):
+        """Generate AI descriptions for all images in the current folder."""
+        # Check if a folder is selected
+        if not hasattr(self, 'current_folder_id') or self.current_folder_id is None:
+            self.notification_manager.show_notification(
+                "No Folder Selected",
+                "Please select a folder to generate descriptions."
+            )
+            return
+        
+        # Ask if user wants to process all images or only those without descriptions
+        process_all = self._confirm_process_all()
+        if process_all is None:  # User cancelled
+            return
+        
+        # Initialize batch processor if not already initialized
+        if not hasattr(self, 'batch_processor'):
+            from src.ai.batch_processor import BatchProcessor
+            from src.ai.image_processor import AIImageProcessor
+            
+            # Create AI processor
+            ai_processor = AIImageProcessor(self.db_manager)
+            self.batch_processor = BatchProcessor(ai_processor, self.db_manager)
+        
+        # Create progress dialog
+        progress_dialog = ProgressDialog("Generating Descriptions", "Preparing images...", parent=self)
+        progress_dialog.setModal(True)
+        progress_dialog.show()
+        
+        # Create worker
+        worker = Worker(
+            self.batch_processor.process_folder,
+            folder_id=self.current_folder_id,
+            process_all=process_all,
+            progress_callback=lambda current, total, message: progress_dialog.update_progress(current, total, message)
+        )
+        
+        def on_complete(result):
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show completion notification
+            if result.get("cancelled", False):
+                self.notification_manager.show_notification(
+                    "Operation Cancelled",
+                    f"Processing cancelled. {result.get('processed', 0)} images processed."
+                )
+            else:
+                self.notification_manager.show_notification(
+                    "Generation Complete",
+                    f"Processed: {result.get('processed', 0)}, " \
+                    f"Failed: {result.get('failed', 0)}, " \
+                    f"Skipped: {result.get('skipped', 0)}"
+                )
+            
+            # Refresh the current view
+            self.on_folder_selected(self.current_folder_id, None)
+        
+        def on_error(error):
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show error notification
+            self.notification_manager.show_notification(
+                "Error Generating Descriptions",
+                f"An error occurred: {str(error)}"
+            )
+        
+        def on_cancel():
+            # Cancel the batch processing
+            self.batch_processor.cancel_processing()
+            self.status_bar.showMessage("Cancelling batch processing...")
+        
+        # Connect signals - Fix: connect on_complete to result signal, not finished signal
+        worker.signals.result.connect(on_complete)
+        worker.signals.error.connect(on_error)
+        
+        # Connect cancel button
+        if progress_dialog.cancel_button:
+            progress_dialog.cancel_button.clicked.connect(on_cancel)
+        
+        # Start processing
+        self.threadpool.start(worker)
+    
+    def _confirm_process_all(self):
+        """Confirm whether to process all images or only those without descriptions.
+        
+        Returns:
+            bool or None: True to process all, False to process only new, None if cancelled
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Generate Descriptions")
+        msg_box.setText("Do you want to generate descriptions for all images or only images without descriptions?")
+        
+        # Add buttons
+        all_button = msg_box.addButton("All Images", QMessageBox.ButtonRole.YesRole)
+        new_button = msg_box.addButton("Only New Images", QMessageBox.ButtonRole.NoRole)
+        msg_box.addButton(QMessageBox.StandardButton.Cancel)
+        
+        # Show dialog
+        msg_box.exec()
+        
+        # Check which button was clicked
+        clicked_button = msg_box.clickedButton()
+        
+        if clicked_button == all_button:
+            return True
+        elif clicked_button == new_button:
+            return False
+        else:
+            return None
+    
+    def export_selected_images(self):
+        """Export selected images to a folder."""
+        # Get selected images
+        selected_images = list(self.thumbnail_browser.selected_thumbnails)
+        
+        if not selected_images:
+            self.notification_manager.show_notification(
+                "No Images Selected",
+                "Please select one or more images to export."
+            )
+            return
+        
+        # Get export folder
+        export_folder = QFileDialog.getExistingDirectory(
+            self, "Select Export Folder", os.path.expanduser("~"),
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+        
+        if not export_folder:
+            return  # User cancelled
+        
+        # TODO: Implement export functionality with progress dialog
+        self.notification_manager.show_notification(
+            "Export Feature",
+            "This feature will be implemented in a future update."
+        )
+    
+    def rename_selected_images(self):
+        """Rename selected images using a pattern."""
+        # Get selected images
+        selected_images = list(self.thumbnail_browser.selected_thumbnails)
+        
+        if not selected_images:
+            self.notification_manager.show_notification(
+                "No Images Selected",
+                "Please select one or more images to rename."
+            )
+            return
+        
+        # TODO: Implement rename dialog and functionality
+        self.notification_manager.show_notification(
+            "Rename Feature",
+            "This feature will be implemented in a future update."
+        )
+    
+    # ===== Parallel Processing Batch Operations Methods =====
+    
+    def _connect_batch_operation_signals(self):
+        """Connect signals from batch operations manager."""
+        try:
+            if not hasattr(self, 'batch_operations'):
+                logger.warning("Batch operations manager not initialized")
+                return
+                
+            # Connect signals
+            self.batch_operations.signals.operation_started.connect(self._on_batch_operation_started)
+            self.batch_operations.signals.operation_progress.connect(self._on_batch_operation_progress)
+            self.batch_operations.signals.operation_completed.connect(self._on_batch_operation_completed)
+            self.batch_operations.signals.operation_failed.connect(self._on_batch_operation_failed)
+            self.batch_operations.signals.operation_cancelled.connect(self._on_batch_operation_cancelled)
+            
+            logger.debug("Batch operation signals connected")
+        except Exception as e:
+            logger.error(f"Error connecting batch operation signals: {e}")
+    
+    def _on_batch_operation_started(self, operation_id):
+        """Handle batch operation started signal.
+        
+        Args:
+            operation_id (str): Operation ID
+        """
+        logger.debug(f"Batch operation started: {operation_id}")
+        self.status_bar.showMessage(f"Batch operation started: {operation_id}")
+    
+    def _on_batch_operation_progress(self, operation_id, current, total, message):
+        """Handle batch operation progress signal.
+        
+        Args:
+            operation_id (str): Operation ID
+            current (int): Current progress
+            total (int): Total operations
+            message (str): Progress message
+        """
+        # Update status bar
+        self.status_bar.showMessage(f"{message} - {current}/{total} ({int(current/total*100)}%)")
+    
+    def _on_batch_operation_completed(self, operation_id, results):
+        """Handle batch operation completed signal.
+        
+        Args:
+            operation_id (str): Operation ID
+            results (dict): Operation results
+        """
+        logger.debug(f"Batch operation completed: {operation_id}")
+        
+        # Get operation type
+        operation_type = results.get('operation_type', '')
+        
+        # Process results based on operation type
+        if operation_type == 'ai_description':
+            # Get stats
+            total = results.get('total_tasks', 0)
+            completed = results.get('completed_tasks', 0)
+            failed = results.get('failed_tasks', 0)
+            
+            # Show notification
+            self.notification_manager.show_notification(
+                "AI Descriptions Generated",
+                f"Successfully generated {completed} description(s)\n" \
+                f"Failed: {failed}\n" \
+                f"Total: {total}",
+                NotificationType.SUCCESS if failed == 0 else NotificationType.WARNING
+            )
+            
+            # Refresh the current view to show updated descriptions
+            self.refresh_current_view()
+        
+        elif operation_type == 'thumbnail':
+            # Get stats
+            total = results.get('total_tasks', 0)
+            completed = results.get('completed_tasks', 0)
+            failed = results.get('failed_tasks', 0)
+            
+            # Show notification
+            self.notification_manager.show_notification(
+                "Thumbnails Generated",
+                f"Successfully generated {completed} thumbnail(s)\n" \
+                f"Failed: {failed}\n" \
+                f"Total: {total}",
+                NotificationType.SUCCESS if failed == 0 else NotificationType.WARNING
+            )
+            
+            # Refresh thumbnails in the current view
+            self.refresh_current_view()
+        
+        # Clear status bar
+        self.status_bar.showMessage("Ready")
+    
+    def _on_batch_operation_failed(self, operation_id, error):
+        """Handle batch operation failed signal.
+        
+        Args:
+            operation_id (str): Operation ID
+            error (str): Error message
+        """
+        logger.error(f"Batch operation failed: {operation_id} - {error}")
+        
+        # Show error notification
+        self.notification_manager.show_notification(
+            "Batch Operation Failed",
+            f"Error: {error}",
+            NotificationType.ERROR
+        )
+        
+        # Clear status bar
+        self.status_bar.showMessage("Ready")
+    
+    def _on_batch_operation_cancelled(self, operation_id):
+        """Handle batch operation cancelled signal.
+        
+        Args:
+            operation_id (str): Operation ID
+        """
+        logger.debug(f"Batch operation cancelled: {operation_id}")
+        
+        # Show notification
+        self.notification_manager.show_notification(
+            "Operation Cancelled",
+            "The batch operation was cancelled.",
+            NotificationType.INFO
+        )
+        
+        # Clear status bar
+        self.status_bar.showMessage("Ready")
+        
+    def refresh_current_view(self):
+        """Refresh the current view."""
+        if hasattr(self, 'current_folder_id') and self.current_folder_id:
+            # Refresh folder view
+            self.on_folder_selected(self.current_folder_id, None)
+        else:
+            # Refresh all images view
+            self.show_all_images()
+    
+    def process_batch_with_parallel_pipeline(self, images, operation_type):
+        """Process a batch of images using the parallel processing pipeline.
+        
+        Args:
+            images (list): List of image dictionaries with 'id', 'path' keys
+            operation_type (str): Type of operation to perform
+            
+        Returns:
+            bool: True if operation was started, False otherwise
+        """
+        if not hasattr(self, 'batch_operations'):
+            logger.warning("Batch operations manager not initialized, using standard processing")
+            return False
+        
+        # Check if we have a valid batch operations manager
+        if not self.batch_operations:
+            logger.warning("Batch operations manager is None, using standard processing")
+            return False
+        
+        try:
+            # Check operation type
+            if operation_type == 'ai_description':
+                # Generate descriptions for images
+                self.batch_operations.generate_descriptions(
+                    images, parent=self, show_progress=True
+                )
+                return True
+            
+            elif operation_type == 'thumbnail':
+                # Generate thumbnails for images
+                self.batch_operations.process_thumbnails(
+                    images, parent=self, show_progress=True
+                )
+                return True
+            
+            else:
+                logger.warning(f"Unsupported operation type: {operation_type}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error starting batch operation: {e}")
+            return False

@@ -1,0 +1,811 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Database manager for StarImageBrowse
+Handles database initialization, connections, and queries.
+"""
+
+import os
+import logging
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+logger = logging.getLogger("StarImageBrowse.database")
+
+class DatabaseManager:
+    """Manages database operations for the application."""
+    
+    def __init__(self, db_path):
+        """Initialize the database manager.
+        
+        Args:
+            db_path (str): Path to the SQLite database file
+        """
+        self.db_path = db_path
+        self.conn = None
+        self.cursor = None
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        
+        logger.info(f"Database path: {db_path}")
+    
+    def connect(self):
+        """Establish a connection to the database.
+        
+        Also checks and repairs the database if it's corrupted.
+        """
+        try:
+            # First check if the database file exists
+            if os.path.exists(self.db_path):
+                # Check database integrity before connecting
+                self._check_and_repair_if_needed()
+                
+            # Now connect to the database
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+            self.cursor = self.conn.cursor()
+            
+            # Verify connection with a simple query
+            try:
+                self.cursor.execute("PRAGMA quick_check")
+                result = self.cursor.fetchone()
+                if result and result[0] != "ok":
+                    logger.warning(f"Database quick check failed: {result[0]}")
+                    # Disconnect and try to repair
+                    self.disconnect()
+                    self._check_and_repair_if_needed()
+                    # Reconnect after repair
+                    self.conn = sqlite3.connect(self.db_path)
+                    self.conn.row_factory = sqlite3.Row
+                    self.cursor = self.conn.cursor()
+            except sqlite3.Error as e:
+                logger.warning(f"Error running quick check: {e}")
+                # Continue anyway, as the connection might still be usable
+            
+            logger.debug("Database connection established")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error connecting to database: {e}")
+            return False
+    
+    def disconnect(self):
+        """Close the database connection."""
+        if self.conn:
+            try:
+                self.conn.close()
+                logger.debug("Database connection closed")
+            except sqlite3.Error as e:
+                logger.error(f"Error closing database connection: {e}")
+            finally:
+                self.conn = None
+                self.cursor = None
+    
+    def initialize_database(self):
+        """Initialize the database schema if it doesn't exist."""
+        try:
+            if not self.connect():
+                return False
+            
+            # Create folders table
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS folders (
+                    folder_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT UNIQUE NOT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    last_scan_time TIMESTAMP
+                )
+            ''')
+            
+            # Create images table
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS images (
+                    image_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folder_id INTEGER,
+                    filename TEXT NOT NULL,
+                    full_path TEXT UNIQUE NOT NULL,
+                    file_size INTEGER,
+                    file_hash TEXT,
+                    creation_date TIMESTAMP,
+                    last_modified_date TIMESTAMP,
+                    thumbnail_path TEXT,
+                    ai_description TEXT,
+                    user_description TEXT,
+                    last_scanned TIMESTAMP,
+                    FOREIGN KEY (folder_id) REFERENCES folders (folder_id)
+                )
+            ''')
+            
+            # Create index on full_path for faster lookups
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_full_path ON images (full_path)
+            ''')
+            
+            # Create index for searching descriptions
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_ai_description ON images (ai_description)
+            ''')
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_user_description ON images (user_description)
+            ''')
+            
+            # Create performance indexes from the start
+            self._create_performance_indexes()
+            
+            # Set optimal performance pragmas
+            self._set_performance_pragmas()
+            
+            # Create virtual tables for full-text search
+            self._create_virtual_tables()
+            
+            # Run ANALYZE to update statistics
+            self.cursor.execute("ANALYZE")
+            
+            self.conn.commit()
+            logger.info("Database schema initialized with optimal settings")
+            return True
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error initializing database: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            self.disconnect()
+    
+    def add_folder(self, folder_path):
+        """Add a folder to monitor for images.
+        
+        Args:
+            folder_path (str): Path to the folder to monitor
+            
+        Returns:
+            int: The folder_id if successful, None otherwise
+        """
+        try:
+            if not self.connect():
+                return None
+            
+            folder_path = str(Path(folder_path).resolve())
+            
+            self.cursor.execute(
+                "INSERT OR IGNORE INTO folders (path, last_scan_time) VALUES (?, ?)",
+                (folder_path, None)
+            )
+            self.conn.commit()
+            
+            # Get the folder ID
+            self.cursor.execute("SELECT folder_id FROM folders WHERE path = ?", (folder_path,))
+            result = self.cursor.fetchone()
+            
+            if result:
+                folder_id = result['folder_id']
+                logger.info(f"Added folder: {folder_path} (ID: {folder_id})")
+                return folder_id
+            return None
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error adding folder: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return None
+        finally:
+            self.disconnect()
+    
+    def get_folders(self, enabled_only=True):
+        """Get all monitored folders.
+        
+        Args:
+            enabled_only (bool): If True, only return enabled folders
+            
+        Returns:
+            list: List of folder dictionaries with keys: folder_id, path, enabled, last_scan_time
+        """
+        try:
+            if not self.connect():
+                return []
+            
+            if enabled_only:
+                self.cursor.execute("SELECT * FROM folders WHERE enabled = 1")
+            else:
+                self.cursor.execute("SELECT * FROM folders")
+            
+            results = [dict(row) for row in self.cursor.fetchall()]
+            return results
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error getting folders: {e}")
+            return []
+        finally:
+            self.disconnect()
+    
+    def remove_folder(self, folder_id):
+        """Remove a folder from monitoring.
+        
+        Args:
+            folder_id (int): ID of the folder to remove
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.connect():
+                return False
+            
+            # Get the folder path for logging
+            self.cursor.execute("SELECT path FROM folders WHERE folder_id = ?", (folder_id,))
+            result = self.cursor.fetchone()
+            
+            if not result:
+                logger.warning(f"Folder with ID {folder_id} not found")
+                return False
+            
+            folder_path = result['path']
+            
+            # Remove all images associated with this folder
+            self.cursor.execute("DELETE FROM images WHERE folder_id = ?", (folder_id,))
+            
+            # Remove the folder
+            self.cursor.execute("DELETE FROM folders WHERE folder_id = ?", (folder_id,))
+            
+            self.conn.commit()
+            logger.info(f"Removed folder: {folder_path} (ID: {folder_id})")
+            return True
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error removing folder: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            self.disconnect()
+    
+    def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, 
+                 thumbnail_path=None, ai_description=None):
+        """Add an image to the database.
+        
+        Args:
+            folder_id (int): ID of the folder containing the image
+            filename (str): Name of the image file
+            full_path (str): Full path to the image file
+            file_size (int): Size of the image in bytes
+            file_hash (str, optional): Hash of the image file for duplicate detection
+            thumbnail_path (str, optional): Path to the thumbnail image
+            ai_description (str, optional): AI-generated description of the image
+            
+        Returns:
+            int: The image_id if successful, None otherwise
+        """
+        try:
+            if not self.connect():
+                return None
+            
+            # Get file creation and modification times
+            path_obj = Path(full_path)
+            if not path_obj.exists():
+                logger.warning(f"Image file does not exist: {full_path}")
+                return None
+            
+            creation_time = datetime.fromtimestamp(os.path.getctime(full_path))
+            modified_time = datetime.fromtimestamp(os.path.getmtime(full_path))
+            current_time = datetime.now()
+            
+            # Check if the image already exists in the database
+            self.cursor.execute("SELECT image_id FROM images WHERE full_path = ?", (full_path,))
+            existing = self.cursor.fetchone()
+            
+            if existing:
+                # Update the existing image
+                image_id = existing['image_id']
+                self.cursor.execute('''
+                    UPDATE images SET
+                        file_size = ?,
+                        file_hash = ?,
+                        last_modified_date = ?,
+                        thumbnail_path = COALESCE(?, thumbnail_path),
+                        ai_description = COALESCE(?, ai_description),
+                        last_scanned = ?
+                    WHERE image_id = ?
+                ''', (
+                    file_size, file_hash, modified_time,
+                    thumbnail_path, ai_description, current_time,
+                    image_id
+                ))
+                self.conn.commit()
+                logger.debug(f"Updated image: {filename} (ID: {image_id})")
+                return image_id
+            
+            # Insert new image
+            self.cursor.execute('''
+                INSERT INTO images (
+                    folder_id, filename, full_path, file_size, file_hash,
+                    creation_date, last_modified_date, thumbnail_path,
+                    ai_description, last_scanned
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                folder_id, filename, full_path, file_size, file_hash,
+                creation_time, modified_time, thumbnail_path,
+                ai_description, current_time
+            ))
+            
+            self.conn.commit()
+            image_id = self.cursor.lastrowid
+            logger.debug(f"Added image: {filename} (ID: {image_id})")
+            return image_id
+            
+        except (sqlite3.Error, OSError) as e:
+            logger.error(f"Error adding image: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return None
+        finally:
+            self.disconnect()
+    
+    def update_image_description(self, image_id, ai_description=None, user_description=None, retry_count=0):
+        """Update the AI or user description for an image.
+        
+        Args:
+            image_id (int): ID of the image to update
+            ai_description (str, optional): AI-generated description to update
+            user_description (str, optional): User-provided description to update
+            retry_count (int, optional): Number of retries attempted (internal use)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        max_retries = 3
+        conn = None
+        
+        try:
+            # Get a connection from the pool
+            conn = self.get_connection()
+            if not conn:
+                logger.error("Failed to get a connection from the pool")
+                return False
+            
+            updates = []
+            params = []
+            
+            if ai_description is not None:
+                updates.append("ai_description = ?")
+                params.append(ai_description)
+            
+            if user_description is not None:
+                updates.append("user_description = ?")
+                params.append(user_description)
+            
+            if not updates:
+                logger.warning("No description provided for update")
+                self.release_connection(conn)
+                return False
+            
+            # Begin a transaction
+            if not conn.begin_transaction():
+                logger.error("Failed to begin transaction")
+                self.release_connection(conn)
+                return False
+            
+            query = f"UPDATE images SET {', '.join(updates)} WHERE image_id = ?"
+            params.append(image_id)
+            
+            cursor = conn.execute(query, params)
+            if not cursor:
+                logger.error("Failed to execute update query")
+                conn.rollback()
+                self.release_connection(conn)
+                return False
+            
+            if not conn.commit():
+                logger.error("Failed to commit transaction")
+                conn.rollback()
+                self.release_connection(conn)
+                return False
+            
+            if cursor.rowcount > 0:
+                logger.debug(f"Updated description for image ID: {image_id}")
+                self.release_connection(conn)
+                return True
+            else:
+                logger.warning(f"Image with ID {image_id} not found or no changes made")
+                self.release_connection(conn)
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error updating image description: {e}")
+            
+            if conn:
+                conn.rollback()
+                self.release_connection(conn)
+            
+            # Check if this is a corruption error
+            if "database disk image is malformed" in str(e) or "database is locked" in str(e):
+                if retry_count < max_retries:
+                    logger.warning(f"Database corruption detected, attempting repair before retry {retry_count + 1}/{max_retries}")
+                    
+                    # Try to repair the database using our robust repair function
+                    try:
+                        # Close all connections before repair
+                        self.pool.close_all_connections()
+                        
+                        from src.database.db_startup_repair import ensure_database_integrity
+                        repaired = ensure_database_integrity(self.db_path)
+                        
+                        if repaired:
+                            logger.info("Database repaired, retrying update operation")
+                            # Retry the operation after repair
+                            return self.update_image_description(image_id, ai_description, user_description, retry_count + 1)
+                    except Exception as repair_error:
+                        logger.error(f"Error during database repair: {repair_error}")
+            
+            return False
+    
+    def search_images(self, query, limit=100, offset=0):
+        """Search for images based on their descriptions.
+        
+        Args:
+            query (str): Search query to match against descriptions
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries matching the search criteria
+        """
+        try:
+            if not self.connect():
+                return []
+            
+            # Try using FTS virtual table if it exists
+            fts_available = False
+            try:
+                # Check if FTS table exists and has data
+                self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='image_fts'")
+                if self.cursor.fetchone():
+                    # Check if it has data
+                    self.cursor.execute("SELECT COUNT(*) FROM image_fts")
+                    count = self.cursor.fetchone()[0]
+                    if count > 0:
+                        fts_available = True
+                        
+                if fts_available:
+                    # Use FTS for more efficient full-text search
+                    try:
+                        self.cursor.execute('''
+                            SELECT i.* FROM images i
+                            JOIN image_fts f ON i.image_id = f.image_id
+                            WHERE image_fts MATCH ?
+                            ORDER BY i.last_modified_date DESC
+                            LIMIT ? OFFSET ?
+                        ''', (query, limit, offset))
+                        
+                        results = [dict(row) for row in self.cursor.fetchall()]
+                        if results:
+                            logger.info(f"FTS search for '{query}' returned {len(results)} results")
+                            return results
+                    except sqlite3.Error as match_error:
+                        logger.warning(f"FTS MATCH query failed, falling back to LIKE: {match_error}")
+            except sqlite3.Error as e:
+                logger.warning(f"FTS table check failed, falling back to LIKE: {e}")
+            
+            # Fallback to traditional LIKE search
+            search_term = f"%{query}%"
+            
+            self.cursor.execute('''
+                SELECT * FROM images
+                WHERE ai_description LIKE ? OR user_description LIKE ?
+                ORDER BY last_modified_date DESC
+                LIMIT ? OFFSET ?
+            ''', (search_term, search_term, limit, offset))
+            
+            results = [dict(row) for row in self.cursor.fetchall()]
+            logger.info(f"Search for '{query}' returned {len(results)} results")
+            return results
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error searching images: {e}")
+            return []
+        finally:
+            self.disconnect()
+    
+    def get_images_for_folder(self, folder_id, limit=100, offset=0):
+        """Get images for a specific folder.
+        
+        Args:
+            folder_id (int): ID of the folder to get images for
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries in the folder
+        """
+        try:
+            if not self.connect():
+                return []
+            
+            # Try using optimized query with index hints for large folders
+            try:
+                self.cursor.execute('''
+                    SELECT * FROM images INDEXED BY idx_images_folder_id
+                    WHERE folder_id = ?
+                    ORDER BY last_modified_date DESC
+                    LIMIT ? OFFSET ?
+                ''', (folder_id, limit, offset))
+            except sqlite3.Error as index_error:
+                # Index might not exist yet, fall back to standard query
+                logger.warning(f"Index error, falling back to standard query: {index_error}")
+                self.cursor.execute('''
+                    SELECT * FROM images
+                    WHERE folder_id = ?
+                    ORDER BY last_modified_date DESC
+                    LIMIT ? OFFSET ?
+                ''', (folder_id, limit, offset))
+            
+            results = [dict(row) for row in self.cursor.fetchall()]
+            return results
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error getting images for folder: {e}")
+            return []
+        finally:
+            self.disconnect()
+            
+    def optimize_for_large_collections(self):
+        """Optimize the database for large image collections.
+        
+        This method applies various optimizations to improve performance
+        when dealing with large numbers of images.
+        
+        Returns:
+            bool: True if optimization was successful, False otherwise
+        """
+        from .db_optimizer import DatabaseOptimizer
+        optimizer = DatabaseOptimizer(self)
+        
+        try:
+            # Run basic optimizations
+            if not optimizer.optimize_database():
+                logger.error("Failed to run basic database optimizations")
+                return False
+            
+            # Create virtual tables for full-text search
+            if not optimizer.create_virtual_tables():
+                logger.warning("Failed to create virtual tables for full-text search")
+                # Continue anyway as this is not critical
+            
+            # Optimize query performance
+            if not optimizer.optimize_query_performance():
+                logger.warning("Failed to optimize query performance")
+                # Continue anyway as this is not critical
+            
+            # Analyze and log database statistics
+            stats = optimizer.analyze_database_stats()
+            logger.info(f"Database statistics: {stats['total_images']} images in {stats['total_folders']} folders")
+            logger.info(f"Database size: {stats['database_size_mb']:.2f} MB")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error optimizing database for large collections: {e}")
+            return False
+    
+    def get_image_by_id(self, image_id):
+        """Get an image by its ID.
+        
+        Args:
+            image_id (int): ID of the image to get
+            
+        Returns:
+            dict: Image data or None if not found
+        """
+        try:
+            if not self.connect():
+                return None
+            
+            self.cursor.execute("SELECT * FROM images WHERE image_id = ?", (image_id,))
+            result = self.cursor.fetchone()
+            
+            if result:
+                return dict(result)
+            return None
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error getting image by ID: {e}")
+            return None
+        finally:
+            self.disconnect()
+    
+    def delete_image(self, image_id):
+        """Delete an image from the database.
+        
+        Args:
+            image_id (int): ID of the image to delete
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.connect():
+                return False
+            
+            # Get image info for logging
+            self.cursor.execute("SELECT filename, full_path, thumbnail_path FROM images WHERE image_id = ?", (image_id,))
+            image = self.cursor.fetchone()
+            
+            if not image:
+                logger.warning(f"Image with ID {image_id} not found")
+                return False
+            
+            # Delete the image record
+            self.cursor.execute("DELETE FROM images WHERE image_id = ?", (image_id,))
+            self.conn.commit()
+            
+            logger.info(f"Deleted image: {image['filename']} (ID: {image_id})")
+            
+            # Return the thumbnail path so it can be deleted if needed
+            return {
+                'success': True,
+                'thumbnail_path': image['thumbnail_path'],
+                'full_path': image['full_path']
+            }
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting image: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            self.disconnect()
+    
+    def update_folder_scan_time(self, folder_id):
+        """Update the last scan time for a folder.
+        
+        Args:
+            folder_id (int): ID of the folder to update
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.connect():
+                return False
+            
+            current_time = datetime.now()
+            
+            self.cursor.execute(
+                "UPDATE folders SET last_scan_time = ? WHERE folder_id = ?",
+                (current_time, folder_id)
+            )
+            
+            self.conn.commit()
+            return True
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error updating folder scan time: {e}")
+            if self.conn:
+                self.conn.rollback()
+            return False
+        finally:
+            self.disconnect()
+    
+    def _create_performance_indexes(self):
+        """Create additional indexes to improve query performance."""
+        try:
+            # Index for folder_id to speed up folder-based queries
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_folder_id ON images (folder_id)
+            ''')
+            
+            # Index for last_modified_date to speed up sorting
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_last_modified ON images (last_modified_date DESC)
+            ''')
+            
+            # Compound index for search queries with sorting
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_search_modified ON images (ai_description, last_modified_date DESC)
+            ''')
+            self.cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_images_search_modified_user ON images (user_description, last_modified_date DESC)
+            ''')
+            
+            logger.info("Performance indexes created successfully")
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error creating performance indexes: {e}")
+            raise
+    
+    def _set_performance_pragmas(self):
+        """Set safe PRAGMA settings for better performance."""
+        try:
+            # Set synchronous mode to NORMAL for better performance with good reliability
+            self.cursor.execute("PRAGMA synchronous=NORMAL")
+            
+            # Set journal mode to DELETE for better compatibility
+            self.cursor.execute("PRAGMA journal_mode=DELETE")
+            
+            # Set temp store to MEMORY for better performance
+            self.cursor.execute("PRAGMA temp_store=MEMORY")
+            
+            # Set cache size to 5000 pages (about 20MB) - conservative but effective
+            self.cursor.execute("PRAGMA cache_size=5000")
+            
+            logger.info("Performance PRAGMAs set successfully")
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error setting performance PRAGMAs: {e}")
+            raise
+    
+    def _check_and_repair_if_needed(self):
+        """Check if the database is corrupted and repair it if needed.
+        
+        This method is called automatically during database connection.
+        """
+        try:
+            # Import the repair module
+            from src.database.db_repair import check_database_integrity, repair_database
+            
+            # Check database integrity
+            integrity_result = check_database_integrity(self.db_path)
+            
+            if integrity_result is False:
+                logger.warning("Database integrity check failed, performing automatic repair")
+                
+                # Perform repair
+                repair_result = repair_database(self.db_path, parent_widget=None)
+                
+                if repair_result:
+                    logger.info("Database repair completed successfully")
+                else:
+                    logger.error("Database repair failed")
+            else:
+                logger.debug("Database integrity check passed")
+                
+        except Exception as e:
+            logger.error(f"Error checking/repairing database: {e}")
+    
+    def _create_virtual_tables(self):
+        """Create virtual tables for full-text search capabilities."""
+        try:
+            # Create virtual table for full-text search on descriptions
+            self.cursor.execute('''
+                CREATE VIRTUAL TABLE IF NOT EXISTS image_fts USING fts5(
+                    image_id UNINDEXED,
+                    ai_description,
+                    user_description,
+                    content='images',
+                    content_rowid='image_id'
+                )
+            ''')
+            
+            # Create triggers to keep FTS table in sync with the images table
+            # Trigger for INSERT
+            self.cursor.execute('''
+                CREATE TRIGGER IF NOT EXISTS images_ai_insert AFTER INSERT ON images BEGIN
+                    INSERT INTO image_fts(image_id, ai_description, user_description)
+                    VALUES (new.image_id, new.ai_description, new.user_description);
+                END
+            ''')
+            
+            # Trigger for UPDATE
+            self.cursor.execute('''
+                CREATE TRIGGER IF NOT EXISTS images_ai_update AFTER UPDATE ON images BEGIN
+                    UPDATE image_fts SET 
+                        ai_description = new.ai_description,
+                        user_description = new.user_description
+                    WHERE image_id = new.image_id;
+                END
+            ''')
+            
+            # Trigger for DELETE
+            self.cursor.execute('''
+                CREATE TRIGGER IF NOT EXISTS images_ai_delete AFTER DELETE ON images BEGIN
+                    DELETE FROM image_fts WHERE image_id = old.image_id;
+                END
+            ''')
+            
+            logger.info("Virtual tables created successfully")
+            
+        except sqlite3.Error as e:
+            logger.error(f"Error creating virtual tables: {e}")
+            # Continue anyway as this is not critical for basic functionality
+            pass

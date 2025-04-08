@@ -1,4 +1,4 @@
-# STARNODES Image Manager v0.9
+# STARNODES Image Manager v0.9.1
 
 A modern image browser with AI-powered description generation and search capabilities.
 
@@ -10,15 +10,22 @@ STARNODES Image Manager is a Windows application that allows you to manage and s
 
 - **Intelligent Image Scanning**: Scans specified folders for PNG and JPEG images
 - **AI-Powered Descriptions**: Uses Ollama's vision models to create detailed descriptions of images
+- **Structured AI Descriptions**: Descriptions include main colors, subject, and stylistic elements
 - **Automatic Model Detection**: Automatically detects and uses available models on your Ollama server
 - **Smart Model Selection**: Prioritizes vision models for better image descriptions
 - **Fallback Mechanism**: Uses basic image analysis when Ollama is unavailable
 - **Fast Thumbnail Browsing**: Browse thumbnails with a responsive grid layout
+- **Context-Aware Search**: Search only within the current folder or across all folders
 - **Natural Language Search**: Find images using meaningful search terms
+- **Date-Based Search**: Find images by modification date range
+- **All Images View**: Browse your complete image collection across all folders
 - **Folder Management**: Add and remove monitored image folders
 - **Image Operations**: Copy, open, edit descriptions, or delete images through a context menu
 - **Batch Operations**: Perform operations on multiple selected images at once
+- **Batch Renaming**: Rename selected images with customizable patterns
 - **Multiple Themes**: Choose from 12 different themes including a high-contrast accessibility option
+- **Database Optimization**: Automatic database maintenance for optimal performance
+- **Path Normalization**: Robust path handling to prevent file access issues
 - **Fully Portable**: Runs from any folder or USB drive without installation
 
 ## Installation
@@ -63,12 +70,20 @@ python main.py
 - View thumbnails in the main grid layout
 - Click a thumbnail to select it
 - Double-click to open the image
+- Use "All Images" view to see your complete collection
 
 ### Searching
 
 1. Enter search terms in the search box (e.g., "sunset beach", "dog playing")
 2. Click "Search" or press Enter
 3. Browse the matching images in the thumbnail grid
+4. Use date range search to find images by modification date
+
+### Batch Operations
+
+1. Select multiple images by holding Ctrl while clicking thumbnails
+2. Right-click to access batch operations menu
+3. Choose an operation (Generate AI Descriptions, Copy, Delete, Rename)
 
 ### Context Menu
 
@@ -76,8 +91,11 @@ Right-click on any thumbnail to access these options:
 
 - **Copy to folder**: Copy the selected image(s) to another location
 - **Open with...**: Open the image with your chosen application
+- **Generate AI description**: Generate or regenerate an AI description
 - **Edit description**: View or edit the AI-generated description
+- **Delete description**: Remove the AI-generated description
 - **Delete image**: Remove the image from the database (option to delete the file too)
+- **Batch operations**: Access batch operations for multiple selected images
 
 ## Customization
 

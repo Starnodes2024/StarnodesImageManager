@@ -12,6 +12,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtWidgets import QApplication
 
+# Import the new caching system
+from src.cache.image_cache import ImageCache
+
 logger = logging.getLogger("StarImageBrowse.ui.lazy_thumbnail_loader")
 
 class ThumbnailLoadSignals(QObject):
@@ -73,14 +76,19 @@ class ThumbnailLoadTask(QRunnable):
             self.signals.error.emit(self.image_id, str(e))
 
 class LazyThumbnailLoader(QObject):
-    """Manager for lazy loading thumbnails."""
+    """Manager for lazy loading thumbnails.
     
-    def __init__(self, max_concurrent=4, parent=None):
+    Uses a multi-level caching system for efficient thumbnail access with 
+    optimization for both memory and disk storage.
+    """
+    
+    def __init__(self, max_concurrent=4, parent=None, config_manager=None):
         """Initialize the lazy thumbnail loader.
         
         Args:
             max_concurrent (int): Maximum number of concurrent loading tasks
             parent (QObject, optional): Parent object
+            config_manager: Configuration manager instance
         """
         super().__init__(parent)
         self.threadpool = QThreadPool()
@@ -91,11 +99,15 @@ class LazyThumbnailLoader(QObject):
         self.load_timer.timeout.connect(self.process_pending_tasks)
         self.load_timer.start(50)  # Check for pending tasks every 50ms
         
-        # Cache of loaded thumbnails
-        self.cache = {}  # image_id -> QPixmap
-        self.cache_size_limit = 100  # Maximum number of thumbnails to cache
+        # Initialize the multi-level image cache
+        self.image_cache = ImageCache(config_manager)
         
-        logger.info(f"LazyThumbnailLoader initialized with max_concurrent={max_concurrent}")
+        # Cache parameters
+        self.cache_size_limit = 100  # Maximum number of thumbnails in memory
+        if config_manager:
+            self.cache_size_limit = config_manager.get("cache", "thumbnail_memory_limit", 100)
+        
+        logger.info(f"LazyThumbnailLoader initialized with max_concurrent={max_concurrent} and cache_size_limit={self.cache_size_limit}")
     
     def queue_thumbnail(self, image_id, thumbnail_path, callback):
         """Queue a thumbnail for loading.
@@ -105,9 +117,11 @@ class LazyThumbnailLoader(QObject):
             thumbnail_path (str): Path to the thumbnail image
             callback (callable): Function to call with the loaded pixmap
         """
-        # Check if already in cache
-        if image_id in self.cache:
-            QTimer.singleShot(0, lambda: callback(self.cache[image_id]))
+        # First check the multi-level cache
+        pixmap = self.image_cache.get_thumbnail(image_id)
+        if pixmap and not pixmap.isNull():
+            # Found in cache, return immediately via callback
+            QTimer.singleShot(0, lambda: callback(pixmap))
             return
         
         # Add to pending tasks
@@ -141,9 +155,9 @@ class LazyThumbnailLoader(QObject):
         # Remove from active tasks
         self.active_tasks.discard(image_id)
         
-        # Add to cache
-        self.cache[image_id] = pixmap
-        self.manage_cache()
+        # Add to multi-level cache
+        if pixmap and not pixmap.isNull():
+            self.image_cache.set_thumbnail(image_id, pixmap)
         
         # Call the callback
         callback(pixmap)
@@ -165,17 +179,10 @@ class LazyThumbnailLoader(QObject):
         # Call the callback with None
         callback(None)
     
-    def manage_cache(self):
-        """Manage the thumbnail cache size."""
-        if len(self.cache) > self.cache_size_limit:
-            # Remove oldest items (first items in the dictionary)
-            excess = len(self.cache) - self.cache_size_limit
-            for _ in range(excess):
-                self.cache.pop(next(iter(self.cache.keys())))
-    
     def clear_cache(self):
         """Clear the thumbnail cache."""
-        self.cache.clear()
+        # Clear the multi-level image cache
+        self.image_cache.clear()
     
     def cancel_pending(self, image_id=None):
         """Cancel pending thumbnail loading tasks.

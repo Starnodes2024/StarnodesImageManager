@@ -17,6 +17,9 @@ from queue import Queue
 from threading import Thread, Event
 import time
 
+# Import the Ollama batch processor
+from .ollama_batch_processor import OllamaBatchProcessor
+
 logger = logging.getLogger("StarImageBrowse.ai")
 
 class AIImageProcessor:
@@ -39,6 +42,9 @@ class AIImageProcessor:
         self.processing_thread = None
         self.stop_event = Event()
         
+        # Initialize batch processor to None
+        self.batch_processor = None
+        
         # Load Ollama configuration from config manager if available
         from src.config.config_manager import ConfigManager
         config = ConfigManager()
@@ -46,6 +52,10 @@ class AIImageProcessor:
         # Ollama configuration
         self.ollama_url = config.get("ollama", "server_url", "http://localhost:11434")
         self.ollama_model = config.get("ollama", "model", "")
+        self.system_prompt = config.get("ollama", "system_prompt", "Describe this image concisely, start with main colors seperated by \" , \", then the main subject and key visual elements and style at the end.")
+        
+        # Maximum number of concurrent Ollama workers
+        self.max_workers = config.get("ollama", "max_workers", 4)
         
         # If no model is specified, try to find an available one
         if not self.ollama_model:
@@ -107,6 +117,17 @@ class AIImageProcessor:
                 return False
                 
             logger.info(f"Ollama server available with model {self.ollama_model}")
+            
+            # Initialize the batch processor if not already initialized
+            if not self.batch_processor:
+                self.batch_processor = OllamaBatchProcessor(
+                    ollama_url=self.ollama_url,
+                    model_name=self.ollama_model,
+                    system_prompt=self.system_prompt,
+                    max_workers=self.max_workers
+                )
+                logger.info(f"Initialized Ollama batch processor with {self.max_workers} workers")
+            
             return True
             
         except Exception as e:
@@ -145,8 +166,8 @@ class AIImageProcessor:
             image.save(buffered, format="JPEG", quality=85)  # Reduced quality for smaller payload
             img_str = base64.b64encode(buffered.getvalue()).decode()
             
-            # Prepare the prompt - simplified for faster processing
-            prompt = "Describe this image concisely, focusing on the main subject and key visual elements."
+            # Use the configured system prompt from settings
+            prompt = self.system_prompt
             
             # Send request to Ollama with optimized parameters
             response = requests.post(

@@ -221,3 +221,19 @@ class NotificationManager:
         # Show message box if requested
         if show_message_box and self.parent_widget:
             self.show_message_box(title, message, NotificationType.SUCCESS)
+    
+    def show_notification(self, title, message, message_type=NotificationType.INFO, show_message_box=True):
+        """Show a notification to the user.
+        
+        Args:
+            title (str): Title of the notification
+            message (str): Message to display
+            message_type (NotificationType, optional): Type of message
+            show_message_box (bool, optional): Whether to show a message box
+        """
+        # Show status message
+        self.show_status_message(message, message_type)
+        
+        # Show message box if requested
+        if show_message_box and self.parent_widget:
+            self.show_message_box(title, message, message_type)

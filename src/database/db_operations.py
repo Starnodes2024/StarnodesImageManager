@@ -175,6 +175,23 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
             
+    def _normalize_path(self, path):
+        """Normalize a file path to use consistent separators.
+        
+        Args:
+            path (str): The path to normalize
+            
+        Returns:
+            str: Normalized path using the OS-specific separator
+        """
+        if not path:
+            return path
+            
+        # First convert to standard form with forward slashes
+        normalized = os.path.normpath(path.replace('\\', '/'))
+        # Then convert to os-specific path format
+        return os.path.normpath(normalized)
+    
     def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, thumbnail_path=None, ai_description=None):
         """Add an image to the database.
         
@@ -190,6 +207,10 @@ class DatabaseOperations:
         Returns:
             int: The image_id if successful, None otherwise
         """
+        # Normalize paths before storing to ensure consistent format
+        full_path = self._normalize_path(full_path)
+        if thumbnail_path:
+            thumbnail_path = self._normalize_path(thumbnail_path)
         conn = self.db.get_connection()
         if not conn:
             return None
@@ -432,6 +453,82 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
             
+    def search_images_in_folder(self, folder_id, query, limit=100, offset=0):
+        """Search for images based on their descriptions within a specific folder.
+        
+        Args:
+            folder_id (int): ID of the folder to search within
+            query (str): Search query to match against descriptions
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries matching the search criteria in the specified folder
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            # Use full-text search if available and filter by folder_id
+            try:
+                # Try FTS query first with folder_id filter
+                cursor = conn.execute(
+                    """SELECT i.* FROM images i
+                    JOIN image_fts f ON i.image_id = f.image_id
+                    WHERE image_fts MATCH ? AND i.folder_id = ?
+                    ORDER BY i.last_modified_date DESC
+                    LIMIT ? OFFSET ?""",
+                    (query, folder_id, limit, offset)
+                )
+                if cursor and cursor.fetchone():
+                    # Reset cursor and fetch all results
+                    cursor = conn.execute(
+                        """SELECT i.* FROM images i
+                        JOIN image_fts f ON i.image_id = f.image_id
+                        WHERE image_fts MATCH ? AND i.folder_id = ?
+                        ORDER BY i.last_modified_date DESC
+                        LIMIT ? OFFSET ?""",
+                        (query, folder_id, limit, offset)
+                    )
+                else:
+                    # Fall back to LIKE query with folder_id filter
+                    search_term = f"%{query}%"
+                    cursor = conn.execute(
+                        """SELECT * FROM images
+                        WHERE (ai_description LIKE ? OR user_description LIKE ?)
+                        AND folder_id = ?
+                        ORDER BY last_modified_date DESC
+                        LIMIT ? OFFSET ?""",
+                        (search_term, search_term, folder_id, limit, offset)
+                    )
+            except sqlite3.Error:
+                # Fall back to LIKE query if FTS fails
+                search_term = f"%{query}%"
+                cursor = conn.execute(
+                    """SELECT * FROM images
+                    WHERE (ai_description LIKE ? OR user_description LIKE ?)
+                    AND folder_id = ?
+                    ORDER BY last_modified_date DESC
+                    LIMIT ? OFFSET ?""",
+                    (search_term, search_term, folder_id, limit, offset)
+                )
+                
+            if not cursor:
+                raise Exception("Failed to search images in folder")
+                
+            # Convert to list of dictionaries
+            images = [dict(row) for row in cursor.fetchall()]
+            
+            return images
+            
+        except Exception as e:
+            logger.error(f"Error searching images in folder: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+            
     def get_images_for_folder(self, folder_id, limit=100, offset=0):
         """Get images for a specific folder.
         
@@ -467,6 +564,134 @@ class DatabaseOperations:
         except Exception as e:
             logger.error(f"Error getting images for folder: {e}")
             return []
+            
+        finally:
+            conn.disconnect()
+
+    def get_images_by_date_range(self, from_date, to_date, limit=1000, offset=0):
+        """Get images within a specific date range.
+        
+        Args:
+            from_date (str): Start date in 'YYYY-MM-DD HH:MM:SS' format
+            to_date (str): End date in 'YYYY-MM-DD HH:MM:SS' format
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries within the date range
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            # Execute query checking both creation_date and last_modified_date
+            # to be inclusive of both original and modified dates
+            cursor = conn.execute(
+                """SELECT * FROM images
+                WHERE (creation_date BETWEEN ? AND ?)
+                   OR (last_modified_date BETWEEN ? AND ?)
+                ORDER BY last_modified_date DESC
+                LIMIT ? OFFSET ?""",
+                (from_date, to_date, from_date, to_date, limit, offset)
+            )
+            if not cursor:
+                raise Exception("Failed to get images by date range")
+                
+            # Convert to list of dictionaries
+            images = [dict(row) for row in cursor.fetchall()]
+            
+            return images
+            
+        except Exception as e:
+            logger.error(f"Error getting images by date range: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+            
+    def get_all_images(self, limit=1000, offset=0):
+        """Get all images from all enabled folders.
+        
+        Args:
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries from all enabled folders
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            # Get all folders that are enabled
+            cursor = conn.execute("SELECT folder_id FROM folders WHERE enabled = 1")
+            if not cursor:
+                raise Exception("Failed to get enabled folders")
+                
+            folders = cursor.fetchall()
+            if not folders:
+                return []
+                
+            # Extract folder IDs
+            folder_ids = [f["folder_id"] for f in folders]
+            
+            # Create placeholders for SQL IN clause
+            placeholders = ", ".join(["?" for _ in folder_ids])
+            
+            # Execute query to get all images from enabled folders
+            query = f"""
+                SELECT * FROM images
+                WHERE folder_id IN ({placeholders})
+                ORDER BY last_modified_date DESC
+                LIMIT ? OFFSET ?
+            """
+            
+            # Parameters: folder_ids followed by limit and offset
+            params = folder_ids + [limit, offset]
+            
+            cursor = conn.execute(query, params)
+            if not cursor:
+                raise Exception("Failed to get images from all folders")
+                
+            # Convert to list of dictionaries
+            images = [dict(row) for row in cursor.fetchall()]
+            
+            return images
+            
+        except Exception as e:
+            logger.error(f"Error getting all images: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+            
+    def get_image_count(self):
+        """Get the total number of images in the database.
+        
+        Returns:
+            int: Total number of images
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return 0
+            
+        try:
+            # Execute query to count all images
+            cursor = conn.execute("SELECT COUNT(*) as count FROM images")
+            if not cursor:
+                raise Exception("Failed to count images")
+                
+            result = cursor.fetchone()
+            if not result:
+                return 0
+                
+            return result['count']
+            
+        except Exception as e:
+            logger.error(f"Error counting images: {e}")
+            return 0
             
         finally:
             conn.disconnect()
@@ -548,6 +773,58 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
             
+    def update_image_path(self, image_id, new_filename, new_full_path):
+        """Update the filename and path for an image.
+        
+        Args:
+            image_id (int): ID of the image to update
+            new_filename (str): New filename for the image
+            new_full_path (str): New full path for the image
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Normalize the new path before storing
+        new_full_path = self._normalize_path(new_full_path)
+        logger.debug(f"Updating image path with normalized path: {new_full_path}")
+        conn = self.db.get_connection()
+        if not conn:
+            return False
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Update the image
+            cursor = conn.execute(
+                "UPDATE images SET filename = ?, full_path = ? WHERE image_id = ?",
+                (new_filename, new_full_path, image_id)
+            )
+            if not cursor:
+                raise Exception("Failed to update image path")
+                
+            # Check if any rows were affected
+            if cursor.rowcount == 0:
+                logger.warning(f"Image with ID {image_id} not found")
+                conn.rollback()
+                return False
+                
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            logger.info(f"Updated path for image ID: {image_id} to {new_full_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating image path: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.disconnect()
+    
     def update_folder_scan_time(self, folder_id):
         """Update the last scan time for a folder.
         

@@ -68,7 +68,7 @@ class FolderPanel(QWidget):
         
         # Header
         header_layout = QHBoxLayout()
-        header_label = QLabel("Monitored Folders")
+        header_label = QLabel("Folders")
         header_label.setStyleSheet("font-weight: bold;")
         header_layout.addWidget(header_label)
         
@@ -85,6 +85,12 @@ class FolderPanel(QWidget):
     def refresh_folders(self):
         """Refresh the folder list from the database."""
         self.folder_tree.clear()
+        
+        # Add "All Images" option at the top
+        all_images_item = QTreeWidgetItem(["All Images"])
+        all_images_item.setData(0, Qt.ItemDataRole.UserRole, -1)  # Special ID for All Images
+        all_images_item.setToolTip(0, "View all images across all folders")
+        self.folder_tree.addTopLevelItem(all_images_item)
         
         folders = self.db_manager.get_folders(enabled_only=False)
         
@@ -126,6 +132,12 @@ class FolderPanel(QWidget):
         folder_id = item.data(0, Qt.ItemDataRole.UserRole)
         
         if folder_id is not None:
+            # Special case for All Images (-1)
+            if folder_id == -1:
+                # Emit signal with special ID for all images
+                self.folder_selected.emit(-1, "All Images")
+                return
+                
             # Get folder path
             folders = self.db_manager.get_folders(enabled_only=False)
             folder_info = next((f for f in folders if f["folder_id"] == folder_id), None)

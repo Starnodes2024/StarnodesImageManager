@@ -191,6 +191,12 @@ class SettingsDialog(QDialog):
         self.batch_size_spin.setToolTip("Number of images to process in each batch")
         ollama_layout.addRow("Batch size:", self.batch_size_spin)
         
+        # Ollama System Prompt
+        self.ollama_system_prompt_edit = QLineEdit()
+        self.ollama_system_prompt_edit.setPlaceholderText("Describe this image concisely, start with main colors...")
+        self.ollama_system_prompt_edit.setMinimumWidth(300)
+        ollama_layout.addRow("System prompt:", self.ollama_system_prompt_edit)
+        
         layout.addWidget(ollama_group)
         
         # Description Generation Settings
@@ -311,6 +317,12 @@ class SettingsDialog(QDialog):
             self.ollama_model_combo.setCurrentIndex(index)
         else:
             self.ollama_model_combo.setCurrentText(ollama_model)
+            
+        # Ollama system prompt
+        default_prompt = "Describe this image concisely, focusing on the main subject and key visual elements."
+        self.ollama_system_prompt_edit.setText(
+            self.config_manager.get("ollama", "system_prompt", default_prompt)
+        )
         
         # AI tab - Batch size
         self.batch_size_spin.setValue(
@@ -359,6 +371,7 @@ class SettingsDialog(QDialog):
         # AI tab - Ollama settings
         self.config_manager.set("ollama", "server_url", self.ollama_url_edit.text())
         self.config_manager.set("ollama", "model", self.ollama_model_combo.currentText())
+        self.config_manager.set("ollama", "system_prompt", self.ollama_system_prompt_edit.text())
         
         # AI tab - Batch size
         self.config_manager.set("ai", "batch_size", self.batch_size_spin.value())

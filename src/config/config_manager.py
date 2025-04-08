@@ -10,6 +10,9 @@ import json
 import logging
 from pathlib import Path
 
+# Import cache configuration
+from src.cache.cache_config import apply_cache_config
+
 logger = logging.getLogger("StarImageBrowse.config")
 
 class ConfigManager:
@@ -41,6 +44,9 @@ class ConfigManager:
         # Load existing configuration if available
         self.load()
         
+        # Initialize cache configuration
+        apply_cache_config(self)
+        
         logger.info(f"Configuration manager initialized with file: {self.config_file}")
     
     def _get_default_config(self):
@@ -54,7 +60,7 @@ class ConfigManager:
                 "first_run": True,
                 "window_width": 1200,
                 "window_height": 800,
-                "theme": "system"  # Options: system, light, dark
+                "theme": "dark_purple"  # Updated default theme
             },
             "thumbnails": {
                 "size": 200,
@@ -65,16 +71,35 @@ class ConfigManager:
                 "device": "auto",  # Options: auto, cpu, cuda
                 "batch_size": 1
             },
+            "memory": {
+                "max_pool_size": 100 * 1024 * 1024,  # 100MB default memory pool size
+                "enable_memory_pool": True,          # Enable memory pooling
+                "cleanup_interval": 60,             # Cleanup interval in seconds
+                "debug_memory_usage": False         # Log detailed memory usage
+            },
+            
+            "processing": {
+                "num_workers": min(os.cpu_count() or 4, 8),  # Number of parallel workers
+                "use_process_pool": True,         # Use process pool for CPU-bound tasks
+                "max_batch_size": 50,            # Maximum batch size for processing
+                "enable_parallel": True           # Enable parallel processing
+            },
+            
             "database": {
                 "path": os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "star_image_browse.db")
             },
             "monitor": {
-                "watch_folders": True,
+                "watch_folders": False,
                 "scan_interval_minutes": 30
             },
             "ui": {
                 "show_descriptions": True,
                 "thumbnails_per_row": 0  # 0 = auto based on window size
+            },
+            "ollama": {
+                "server_url": "http://localhost:11434",
+                "model": "llava-phi3:latest",
+                "system_prompt": "Describe this image concisely, start with main colors seperated by \" , \", then the main subject and key visual elements and style at the end."
             }
         }
     

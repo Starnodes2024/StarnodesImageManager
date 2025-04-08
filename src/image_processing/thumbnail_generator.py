@@ -50,11 +50,13 @@ class ThumbnailGenerator:
         
         return thumbnail_path
     
-    def generate_thumbnail(self, image_path):
+    def generate_thumbnail(self, image_path, force=False, target_format=None):
         """Generate a thumbnail for the given image.
         
         Args:
             image_path (str): Path to the original image
+            force (bool): If True, regenerate thumbnail even if it exists
+            target_format (str, optional): Target format for the thumbnail ('JPEG', 'PNG', 'WebP')
             
         Returns:
             str: Path to the generated thumbnail, or None if generation failed
@@ -82,7 +84,7 @@ class ThumbnailGenerator:
         os.makedirs(os.path.dirname(thumbnail_path), exist_ok=True)
         
         # Check if thumbnail already exists
-        if os.path.exists(thumbnail_path):
+        if os.path.exists(thumbnail_path) and not force:
             # Check if the original image is newer than the thumbnail
             if os.path.getmtime(image_path) <= os.path.getmtime(thumbnail_path):
                 logger.debug(f"Thumbnail already exists and is up to date: {thumbnail_path}")
@@ -129,9 +131,17 @@ class ThumbnailGenerator:
                         logger.error(f"Error creating thumbnail with fallback method: {e2}")
                         return None
                 
-                # Save the thumbnail
+                # Save the thumbnail in the specified format
                 try:
-                    img.save(thumbnail_path, "JPEG", quality=85, optimize=True)
+                    # Use target_format if specified, otherwise default to JPEG
+                    output_format = target_format or "JPEG"
+                    
+                    if output_format.upper() == "WEBP":
+                        img.save(thumbnail_path, "WEBP", quality=85, lossless=False)
+                    elif output_format.upper() == "PNG":
+                        img.save(thumbnail_path, "PNG", compress_level=6, optimize=True)
+                    else:  # Default to JPEG
+                        img.save(thumbnail_path, "JPEG", quality=85, optimize=True)
                     logger.debug(f"Generated thumbnail: {thumbnail_path}")
                     return thumbnail_path
                 except Exception as e:

@@ -1,4 +1,4 @@
-# STARNODES Image Manager v0.9 - Help Guide
+# STARNODES Image Manager v0.9.1 - Help Guide
 
 ## Introduction
 
@@ -40,6 +40,13 @@ When you first launch the application, it will create a configuration file with 
 2. Click "Search" or press Enter
 3. The results will show images matching your description
 
+#### Date-Based Search
+
+1. Enable the date range search by clicking the checkbox next to the date filters
+2. Select a date range using the From and To date pickers
+3. Click "Search" to find images modified within that date range
+4. You can combine date search with text search for more specific results
+
 ### Context Menu Operations
 
 Right-click on any thumbnail to access these options:
@@ -63,6 +70,18 @@ You can perform operations on multiple selected images:
    - Generate AI descriptions for all selected images
    - Delete selected images
    - Delete descriptions for selected images
+   - Rename selected images
+
+### Batch Renaming
+
+1. Select multiple images you want to rename
+2. Right-click and choose "Rename Selected Images"
+3. Enter a pattern for the new filenames
+   - Use {n} for sequential numbering (1, 2, 3...)
+   - Use {id} for image ID-based numbering
+   - Use {ext} to reference the original file extension
+   - Example: "vacation_{n}" becomes "vacation_1.jpg", "vacation_2.png", etc.
+4. Click OK to start the renaming process
 
 ## Settings
 
@@ -72,6 +91,7 @@ Access the Settings dialog from the File menu to configure:
 
 - **Ollama Server URL**: The URL where your Ollama server is running (default: http://localhost:11434)
 - **Model**: Select which Ollama model to use for descriptions (requires models installed on your Ollama server)
+- **System Prompt**: Customize how AI describes images (default: "Describe this image concisely, start with main colors seperated by \" , \", then the main subject and key visual elements and style at the end.")
 - **Processing Mode**: Choose to process only new images or all images when generating descriptions
 
 ### UI Settings
@@ -107,6 +127,14 @@ The application will automatically optimize the database for performance. If you
 1. Go to File → Database Maintenance → Optimize Database
 2. Follow the prompts to repair and optimize the database
 
+### Path Issues
+
+If you encounter "File not found" errors when working with images:
+
+1. A path normalization utility is included to fix database path inconsistencies
+2. Run the path fixer from the command line: `python src/utilities/path_fixer.py --db-path "path/to/your/database.db" --fix`
+3. This will standardize all file paths in the database to use consistent separators
+
 ### Image Not Displaying
 
 - Check that the image file still exists at the original location
@@ -120,6 +148,8 @@ The application will automatically optimize the database for performance. If you
 - **Delete**: Delete selected images (with confirmation)
 - **F5**: Refresh the current view
 - **Escape**: Clear selection
+- **Ctrl+Click**: Select/deselect multiple individual thumbnails
+- **Shift+Click**: Select a range of thumbnails
 
 ## Further Help
 

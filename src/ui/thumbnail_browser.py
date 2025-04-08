@@ -264,10 +264,19 @@ class ThumbnailBrowser(QWidget):
         self.thumbnails = {}  # Dictionary of thumbnail widgets by image_id
         self.selected_thumbnails = set()  # Set of selected thumbnail image_ids
         
-        # Initialize lazy thumbnail loader
+        # Initialize lazy thumbnail loader with multi-level caching
         # Determine optimal number of concurrent threads based on CPU cores
         max_concurrent = min(4, QThreadPool.globalInstance().maxThreadCount())
-        self.thumbnail_loader = LazyThumbnailLoader(max_concurrent=max_concurrent)
+        
+        # Get the config manager from the main window if available
+        config_manager = None
+        if parent and hasattr(parent, 'config_manager'):
+            config_manager = parent.config_manager
+            
+        self.thumbnail_loader = LazyThumbnailLoader(
+            max_concurrent=max_concurrent,
+            config_manager=config_manager
+        )
         
         self.setup_ui()
     
@@ -549,9 +558,10 @@ class ThumbnailBrowser(QWidget):
         generate_desc_action = menu.addAction(f"Generate AI description ({num_selected} selected)" if num_selected > 1 else "Generate AI description")
         delete_desc_action = menu.addAction(f"Delete description ({num_selected} selected)" if num_selected > 1 else "Delete description")
         
-        # Add delete action with separator
+        # Add delete actions with separator
         menu.addSeparator()
-        delete_action = menu.addAction(f"Delete image ({num_selected} selected)" if num_selected > 1 else "Delete image")
+        delete_db_action = menu.addAction(f"Delete from database ({num_selected} selected)" if num_selected > 1 else "Delete from database")
+        delete_full_action = menu.addAction(f"Delete from database and disk ({num_selected} selected)" if num_selected > 1 else "Delete from database and disk")
         
         # Show menu and get selected action
         action = menu.exec(position)
@@ -571,8 +581,10 @@ class ThumbnailBrowser(QWidget):
             self.generate_descriptions_for_selected()
         elif action == delete_desc_action:
             self.delete_selected_descriptions()
-        elif action == delete_action:
-            self.delete_selected_images()
+        elif action == delete_db_action:
+            self.delete_selected_images(delete_from_disk=False)
+        elif action == delete_full_action:
+            self.delete_selected_images(delete_from_disk=True)
     
     def copy_selected_images(self, export_mode=False):
         """Copy selected images to a folder.
@@ -934,16 +946,26 @@ class ThumbnailBrowser(QWidget):
         # Refresh display
         self.refresh()
     
-    def delete_selected_images(self):
-        """Delete selected images."""
+    def delete_selected_images(self, delete_from_disk=False):
+        """Delete selected images.
+        
+        Args:
+            delete_from_disk (bool): If True, also delete the image file from disk
+        """
         if not self.selected_thumbnails:
             return
         
-        # Confirm deletion
+        # Confirm deletion with appropriate warning
         num_selected = len(self.selected_thumbnails)
+        if delete_from_disk:
+            message = f"WARNING: This will permanently delete {num_selected} selected image{'s' if num_selected > 1 else ''} from both the database AND your disk. This action cannot be undone.\n\nDo you want to continue?"
+            title = "Confirm Permanent Deletion"
+        else:
+            message = f"Are you sure you want to remove {num_selected} selected image{'s' if num_selected > 1 else ''} from the database? The original files will remain on disk."
+            title = "Confirm Database Removal"
+        
         confirm = QMessageBox.question(
-            self, "Confirm Delete", 
-            f"Are you sure you want to delete {num_selected} selected image{'s' if num_selected > 1 else ''}?",
+            self, title, message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -951,11 +973,23 @@ class ThumbnailBrowser(QWidget):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         
+        # Track statistics for status message
+        deleted_count = 0
+        disk_deleted_count = 0
+        error_count = 0
+        
         # Delete each selected image
         for image_id in list(self.selected_thumbnails):
+            # Get image path first (we need it for disk deletion)
+            image_info = self.db_manager.get_image_by_id(image_id)
+            original_path = image_info.get("full_path") if image_info else None
+            
+            # Delete from database
             result = self.db_manager.delete_image(image_id)
             
-            if result and result.get("success"):
+            if result:
+                deleted_count += 1
+                
                 # Remove thumbnail from UI
                 if image_id in self.thumbnails:
                     thumbnail = self.thumbnails[image_id]
@@ -966,7 +1000,25 @@ class ThumbnailBrowser(QWidget):
                 # Remove from selection
                 self.selected_thumbnails.discard(image_id)
                 
-                # TODO: Handle physical deletion of images if needed
+                # Delete from disk if requested
+                if delete_from_disk and original_path and os.path.exists(original_path):
+                    try:
+                        os.remove(original_path)
+                        disk_deleted_count += 1
+                        logger.info(f"Deleted file from disk: {original_path}")
+                    except Exception as e:
+                        logger.error(f"Error deleting file from disk: {original_path} - {e}")
+                        error_count += 1
+            else:
+                error_count += 1
+        
+        # Show status message
+        if delete_from_disk:
+            self.status_message.emit(f"Deleted {deleted_count} images from database, {disk_deleted_count} from disk" + 
+                                    (f", {error_count} errors" if error_count > 0 else ""))
+        else:
+            self.status_message.emit(f"Deleted {deleted_count} images from database" + 
+                                    (f", {error_count} errors" if error_count > 0 else ""))
         
         # Refresh display
         self.refresh()
@@ -976,9 +1028,12 @@ class ThumbnailBrowser(QWidget):
         if not self.selected_thumbnails:
             return
             
+        # Convert selected thumbnails to a list to ensure proper signal emission
+        selected_ids = list(self.selected_thumbnails)
+        
         # Emit signal for the main window to handle generation
         # This will be connected to the batch generate descriptions method
-        self.batch_generate_requested.emit(list(self.selected_thumbnails))
+        self.batch_generate_requested.emit(selected_ids)
     
     def refresh(self):
         """Refresh the thumbnail display."""

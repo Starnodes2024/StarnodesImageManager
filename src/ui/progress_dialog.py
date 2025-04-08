@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
     QProgressBar, QPushButton, QTextEdit
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QMetaObject, Q_ARG, Qt
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QMetaObject, Q_ARG, Qt, QTimer
 
 logger = logging.getLogger("StarImageBrowse.ui.progress_dialog")
 
@@ -36,6 +36,7 @@ class ProgressDialog(QDialog):
         self.description = description
         self.cancellable = cancellable
         self.is_complete = False
+        self.user_cancelled = False  # Track whether user has explicitly requested cancellation
         
         # Time tracking for estimating remaining time
         self.start_time = None
@@ -110,14 +111,28 @@ class ProgressDialog(QDialog):
     def on_cancel(self):
         """Handle cancel button click."""
         try:
-            logger.debug("Cancel button clicked")
+            # Only proceed if this was triggered by an actual user action on the cancel button
+            # This prevents false cancellation messages
+            if not hasattr(self, 'cancel_button') or not self.cancel_button.isVisible():
+                logger.debug("Ignoring automatic cancel signal - not from user action")
+                return
+                
+            logger.debug("Cancel button explicitly clicked by user")
+            self.user_cancelled = True  # Mark as explicitly cancelled by user
+            
+            # Emit the cancelled signal to the worker
             self.cancelled.emit()
             
+            # Disable the cancel button
             if hasattr(self, 'cancel_button'):
                 self.cancel_button.setEnabled(False)
                 
+            # Update the UI
             self.update_operation("Cancelling operation...")
-            self.log_message("Cancellation requested. Waiting for operations to complete...")
+            self.log_message("Cancellation requested by user. Waiting for operations to complete...")
+            
+            # Automatically close after a reasonable timeout (5 seconds)
+            QTimer.singleShot(5000, self.accept)
             
         except Exception as e:
             logger.error(f"Error in cancel handler: {str(e)}")
@@ -142,13 +157,14 @@ class ProgressDialog(QDialog):
             logger.error(f"Error in closeEvent: {str(e)}")
             event.accept()  # Allow closing on error
     
-    @pyqtSlot(int, int)
-    def update_progress(self, current, total):
+    @pyqtSlot(int, int, str)
+    def update_progress(self, current, total, message=None):
         """Update the progress bar.
         
         Args:
             current (int): Current progress value
             total (int): Total progress value
+            message (str, optional): Operation message to display
         """
         try:
             # Start timing when we get the first progress update
@@ -166,6 +182,10 @@ class ProgressDialog(QDialog):
                                     Qt.ConnectionType.QueuedConnection,
                                     Q_ARG(int, current),
                                     Q_ARG(int, total))
+            
+            # Update operation message if provided
+            if message:
+                self.update_operation(message)
         except Exception as e:
             logger.error(f"Error updating progress: {str(e)}")
     
@@ -296,6 +316,9 @@ class ProgressDialog(QDialog):
     def close_when_finished(self):
         """Enable the close button and mark the operation as complete."""
         try:
+            # Mark dialog as complete to prevent further updates
+            self.is_complete = True
+            
             # Calculate and log total processing time
             if self.start_time is not None:
                 total_time = time.time() - self.start_time
@@ -305,6 +328,9 @@ class ProgressDialog(QDialog):
             # Use invokeMethod to ensure UI update happens on the main thread
             QMetaObject.invokeMethod(self, "_close_when_finished_ui",
                                    Qt.ConnectionType.QueuedConnection)
+            
+            # Log that we're finishing the dialog
+            logger.debug(f"Progress dialog marked as complete: {self.windowTitle()}")
         except Exception as e:
             logger.error(f"Error in close_when_finished: {str(e)}")
     
@@ -322,12 +348,22 @@ class ProgressDialog(QDialog):
             # Hide cancel button if present
             if self.cancellable and hasattr(self, 'cancel_button'):
                 self.cancel_button.setVisible(False)
+                self.cancel_button.setEnabled(False)
             
-            # Show close button
+            # Show and enable close button
             if hasattr(self, 'close_button'):
                 self.close_button.setVisible(True)
+                self.close_button.setEnabled(True)
+                # Focus the close button so Enter key works
+                self.close_button.setFocus()
                 
             # Update the display
             self.repaint()
+            
+            # If the user had already requested cancellation, close automatically
+            if self.user_cancelled:
+                logger.debug("Dialog was in cancellation state - closing automatically")
+                # Use a short delay to ensure UI updates first
+                QTimer.singleShot(500, self.accept)
         except Exception as e:
             logger.error(f"Error in internal close when finished UI: {str(e)}")

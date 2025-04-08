@@ -161,54 +161,6 @@ class DatabaseManager:
         """
         return self.db_ops.search_images(query, limit, offset)
     
-    def search_images_in_folder(self, folder_id, query, limit=100, offset=0):
-        """Search for images based on their descriptions within a specific folder.
-        
-        Args:
-            folder_id (int): ID of the folder to search within
-            query (str): Search query to match against descriptions
-            limit (int, optional): Maximum number of results to return
-            offset (int, optional): Offset for pagination
-            
-        Returns:
-            list: List of image dictionaries matching the search criteria in the specified folder
-        """
-        return self.db_ops.search_images_in_folder(folder_id, query, limit, offset)
-    
-    def get_images_by_date_range(self, from_date, to_date, limit=1000, offset=0):
-        """Get images within a specific date range.
-        
-        Args:
-            from_date (str): Start date in 'YYYY-MM-DD HH:MM:SS' format
-            to_date (str): End date in 'YYYY-MM-DD HH:MM:SS' format
-            limit (int, optional): Maximum number of results to return
-            offset (int, optional): Offset for pagination
-            
-        Returns:
-            list: List of image dictionaries within the date range
-        """
-        return self.db_ops.get_images_by_date_range(from_date, to_date, limit, offset)
-    
-    def get_all_images(self, limit=1000, offset=0):
-        """Get all images from all enabled folders.
-        
-        Args:
-            limit (int, optional): Maximum number of results to return
-            offset (int, optional): Offset for pagination
-            
-        Returns:
-            list: List of image dictionaries from all enabled folders
-        """
-        return self.db_ops.get_all_images(limit, offset)
-    
-    def get_image_count(self):
-        """Get the total number of images in the database.
-        
-        Returns:
-            int: Total number of images
-        """
-        return self.db_ops.get_image_count()
-    
     def get_images_for_folder(self, folder_id, limit=100, offset=0):
         """Get images for a specific folder.
         
@@ -309,30 +261,3 @@ class DatabaseManager:
         # The new system creates virtual tables automatically
         logger.info("Virtual tables created (compatibility mode)")
         return True
-        
-    def update_image_path(self, image_id, new_filename, new_full_path):
-        """Update the filename and path for an image.
-        
-        Args:
-            image_id (int): ID of the image to update
-            new_filename (str): New filename for the image
-            new_full_path (str): New full path for the image
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        return self.db_ops.update_image_path(image_id, new_filename, new_full_path)
-    
-    def get_image_description(self, image_id):
-        """Get the AI description for an image.
-        
-        Args:
-            image_id (int): ID of the image to get description for
-            
-        Returns:
-            str: AI description or None if not found
-        """
-        image = self.get_image_by_id(image_id)
-        if image and 'ai_description' in image:
-            return image['ai_description']
-        return None

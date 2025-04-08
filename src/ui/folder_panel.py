@@ -24,6 +24,7 @@ class FolderPanel(QWidget):
     folder_selected = pyqtSignal(int, str)  # Signal emitted when a folder is selected (folder_id, path)
     folder_added = pyqtSignal(int, str)  # Signal emitted when a folder is added (folder_id, path)
     folder_removed = pyqtSignal(int)  # Signal emitted when a folder is removed (folder_id)
+    add_folder_requested = pyqtSignal()  # Signal to request adding a new folder
     
     def __init__(self, db_manager, parent=None):
         """Initialize the folder panel.
@@ -72,6 +73,13 @@ class FolderPanel(QWidget):
         header_label.setStyleSheet("font-weight: bold;")
         header_layout.addWidget(header_label)
         
+        # Add New Folder button
+        self.add_folder_button = QPushButton("+")
+        self.add_folder_button.setToolTip("Add New Folder")
+        self.add_folder_button.setFixedSize(24, 24)  # Make it a small button
+        self.add_folder_button.clicked.connect(self.on_add_folder_clicked)
+        header_layout.addWidget(self.add_folder_button)
+        
         layout.addLayout(header_layout)
         
         # Folder tree
@@ -82,6 +90,12 @@ class FolderPanel(QWidget):
         self.folder_tree.customContextMenuRequested.connect(self.on_context_menu)
         layout.addWidget(self.folder_tree)
     
+    def on_add_folder_clicked(self):
+        """Handler for Add New Folder button click."""
+        # Emit signal to request adding a new folder
+        # This will be connected to the main window's on_add_folder method
+        self.add_folder_requested.emit()
+        
     def refresh_folders(self):
         """Refresh the folder list from the database."""
         self.folder_tree.clear()

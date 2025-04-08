@@ -19,7 +19,7 @@ STARNODES Image Manager is a Windows application that allows you to manage and s
 - **Natural Language Search**: Find images using meaningful search terms
 - **Date-Based Search**: Find images by modification date range
 - **All Images View**: Browse your complete image collection across all folders
-- **Folder Management**: Add and remove monitored image folders
+- **Enhanced Folder Management**: Add multiple folders at once, quick-add button in folder panel
 - **Image Operations**: Copy, open, edit descriptions, or delete images through a context menu
 - **Batch Operations**: Perform operations on multiple selected images at once
 - **Batch Renaming**: Rename selected images with customizable patterns

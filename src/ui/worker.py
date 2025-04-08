@@ -39,6 +39,7 @@ class Worker(QRunnable):
         self.args = args
         self.kwargs = kwargs
         self.signals = WorkerSignals()
+        self.cancelled = False  # Flag to indicate if this task has been cancelled
         
         # Add the signals to the kwargs if needed
         # Handle both 'progress_callback' and 'callback' parameter names for better compatibility
@@ -179,4 +180,34 @@ class BackgroundTaskManager:
             del self.active_tasks[task_id]
             logger.debug(f"Removed background task: {task_id}")
             return True
+        return False
+        
+    def cancel_task(self, task_id):
+        """Mark a task as cancelled.
+        
+        Args:
+            task_id (str): Unique identifier for the task
+            
+        Returns:
+            bool: True if task was marked as cancelled, False if task doesn't exist
+        """
+        if task_id in self.active_tasks:
+            # Set cancelled flag on the worker
+            worker = self.active_tasks[task_id]
+            worker.cancelled = True
+            logger.debug(f"Marked task as cancelled: {task_id}")
+            return True
+        return False
+    
+    def is_task_cancelled(self, task_id):
+        """Check if a task has been cancelled.
+        
+        Args:
+            task_id (str): Unique identifier for the task
+            
+        Returns:
+            bool: True if task is cancelled, False otherwise
+        """
+        if task_id in self.active_tasks:
+            return getattr(self.active_tasks[task_id], 'cancelled', False)
         return False

@@ -16,9 +16,12 @@ When you first launch the application, it will create a configuration file with 
 
 ### Adding Image Folders
 
-1. Click the "Add Folder" button in the toolbar or select File → Add Folder
-2. Choose a folder containing images in the file browser
-3. The application will scan the folder and create thumbnails
+1. Click the "+" button next to "Folders" in the left panel, or select File → Add Folder
+2. Choose one or multiple folders containing images in the file browser
+   - Hold Ctrl while clicking to select multiple non-adjacent folders
+   - Hold Shift to select a range of folders
+3. The application will automatically detect and skip any folders that have already been added
+4. You'll be prompted to scan the newly added folders to create thumbnails
 
 ### Managing Folders
 

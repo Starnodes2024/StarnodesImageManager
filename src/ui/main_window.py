@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QLineEdit, QPushButton, QToolBar, QStatusBar,
     QFileDialog, QMenu, QMessageBox, QApplication, QDialog,
-    QInputDialog
+    QInputDialog, QListView, QTreeView, QAbstractItemView,
+    QListWidget, QListWidgetItem, QDialogButtonBox
 )
 from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool
@@ -369,6 +370,7 @@ class MainWindow(QMainWindow):
         # Connect signals
         self.folder_panel.folder_selected.connect(self.on_folder_selected)
         self.folder_panel.folder_removed.connect(self.on_folder_removed)
+        self.folder_panel.add_folder_requested.connect(self.on_add_folder)
         
         self.search_panel.search_requested.connect(self.on_search_requested)
         self.search_panel.date_search_requested.connect(self.on_date_search_requested)
@@ -387,37 +389,192 @@ class MainWindow(QMainWindow):
     
     def on_add_folder(self):
         """Handle the Add Folder action."""
-        folder_path = QFileDialog.getExistingDirectory(
-            self, "Select Folder to Monitor", 
-            QDir.homePath(), 
-            QFileDialog.Option.ShowDirsOnly
-        )
+        # Let the user select folders using the standard dialog but without multiple selection
+        # We'll handle multiple selection more explicitly
+        selected_folders = []
         
-        if folder_path:
-            # Add folder to the database
+        # Create our custom dialog for folder selection
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Folders to Monitor")
+        dialog.setMinimumWidth(600)
+        dialog.setMinimumHeight(400)
+        
+        # Create main layout
+        main_layout = QVBoxLayout(dialog)
+        
+        # Selected folders list
+        selected_label = QLabel("Selected Folders:")
+        main_layout.addWidget(selected_label)
+        
+        selected_list = QListWidget()
+        main_layout.addWidget(selected_list)
+        
+        # Buttons for adding/removing
+        buttons_layout = QHBoxLayout()
+        
+        add_btn = QPushButton("Add Folders...")
+        remove_btn = QPushButton("Remove")
+        buttons_layout.addWidget(add_btn)
+        buttons_layout.addWidget(remove_btn)
+        main_layout.addLayout(buttons_layout)
+        
+        # Dialog buttons
+        dialog_buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        dialog_buttons.accepted.connect(dialog.accept)
+        dialog_buttons.rejected.connect(dialog.reject)
+        main_layout.addWidget(dialog_buttons)
+        
+        # Function to add multiple folders at once
+        def add_folders():
+            # Create a file dialog that supports multiple selection
+            file_dialog = QFileDialog(dialog)
+            file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+            file_dialog.setOption(QFileDialog.Option.ShowDirsOnly)
+            file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)  # Required for multi-selection
+            file_dialog.setWindowTitle("Select Multiple Folders")
+            file_dialog.setDirectory(QDir.homePath())
+            
+            # Hack to allow multiple directory selection
+            list_view = file_dialog.findChild(QListView, "listView")
+            if list_view:
+                list_view.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            tree_view = file_dialog.findChild(QTreeView)
+            if tree_view:
+                tree_view.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            
+            # Get selected folders
+            if not file_dialog.exec():
+                return
+                
+            # Get selected folders
+            selected_files = file_dialog.selectedFiles()
+            
+            # Process each selected folder
+            for folder in selected_files:
+                # Normalize path
+                folder = os.path.normpath(folder)
+                
+                # Check if this folder is already in the list
+                for existing_index in range(selected_list.count()):
+                    existing_folder = selected_list.item(existing_index).text()
+                    existing_folder = os.path.normpath(existing_folder)
+                    
+                    # If the folder is already in the list, don't add it
+                    if folder == existing_folder:
+                        QMessageBox.warning(dialog, "Folder Already Selected", 
+                            f"'{folder}' is already in the list of selected folders.",
+                            QMessageBox.StandardButton.Ok)
+                        return
+                
+                # Now check if this folder is a parent of any existing folder
+                # If so, we'll ignore it (prioritizing subfolders over parent folders)
+                folders_to_remove = []
+                is_parent_of_existing = False
+                
+                for existing_index in range(selected_list.count()):
+                    existing_folder = selected_list.item(existing_index).text()
+                    existing_folder = os.path.normpath(existing_folder)
+                    
+                    # If the new folder is a parent of an existing folder, don't add it (silently skip)
+                    if folder != existing_folder and existing_folder.startswith(folder + os.sep):
+                        is_parent_of_existing = True
+                        break
+                    
+                    # If the new folder is a child of an existing folder, mark the parent for removal
+                    # We'll prioritize this subfolder over its parent (silently)
+                    if folder != existing_folder and folder.startswith(existing_folder + os.sep):
+                        folders_to_remove.append(existing_folder)
+                
+                # If this folder is a parent of something we already have, silently skip it
+                if is_parent_of_existing:
+                    return
+                
+                # Silently remove any parent folders that contain this folder
+                for folder_to_remove in folders_to_remove:
+                    # Find and remove the parent folder from the list without notification
+                    for i in range(selected_list.count()):
+                        if selected_list.item(i).text() == folder_to_remove:
+                            removed_item = selected_list.takeItem(i)
+                            del removed_item  # Free memory
+                            break
+                
+                # Add the folder to the list
+                item = QListWidgetItem(folder)
+                selected_list.addItem(item)
+        
+        # Function to remove a folder
+        def remove_folder():
+            selected_items = selected_list.selectedItems()
+            for item in selected_items:
+                selected_list.takeItem(selected_list.row(item))
+        
+        # Connect buttons
+        add_btn.clicked.connect(add_folders)
+        remove_btn.clicked.connect(remove_folder)
+        
+        # Execute the dialog
+        if dialog.exec():
+            # Get the selected folders
+            for i in range(selected_list.count()):
+                folder = selected_list.item(i).text()
+                selected_folders.append(folder)
+        
+        if not selected_folders:
+            return
+            
+        # Track results for summary message
+        added_folders = []
+        skipped_folders = []
+        failed_folders = []
+        
+        # Add each folder to the database
+        for folder_path in selected_folders:
             folder_id = self.db_manager.add_folder(folder_path)
             
             if folder_id:
-                # Update folder panel
-                self.folder_panel.refresh_folders()
+                # Check if this was a new folder or an existing one
+                # Use the proper method to count images in the folder
+                images_in_folder = self.db_manager.get_images_for_folder(folder_id, limit=1)
+                image_count = len(images_in_folder)
                 
-                # Ask if user wants to scan now
-                response = QMessageBox.question(
-                    self, "Scan Folder", 
-                    f"Folder '{folder_path}' added successfully. Do you want to scan it for images now?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
-                )
-                
-                if response == QMessageBox.StandardButton.Yes:
-                    # Scan the folder
-                    self.scan_folder(folder_id, folder_path)
+                if image_count > 0:
+                    # This was an existing folder that was skipped
+                    skipped_folders.append(folder_path)
+                else:
+                    # This was a new folder that was added
+                    added_folders.append((folder_id, folder_path))
             else:
-                QMessageBox.critical(
-                    self, "Error", 
-                    f"Failed to add folder '{folder_path}' to the database.",
-                    QMessageBox.StandardButton.Ok
-                )
+                failed_folders.append(folder_path)
+        
+        # Update folder panel
+        self.folder_panel.refresh_folders()
+        
+        # Create summary message
+        summary = []
+        if added_folders:
+            summary.append(f"Added {len(added_folders)} new folder(s).")
+        if skipped_folders:
+            summary.append(f"Skipped {len(skipped_folders)} existing folder(s).")
+        if failed_folders:
+            summary.append(f"Failed to add {len(failed_folders)} folder(s).")
+        
+        summary_message = "\n".join(summary)
+        
+        # Ask if user wants to scan new folders now
+        if added_folders:
+            response = QMessageBox.question(
+                self, "Scan Folders", 
+                f"{summary_message}\n\nDo you want to scan the newly added folders for images now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if response == QMessageBox.StandardButton.Yes:
+                # Scan all the new folders using a single batch process
+                self.scan_multiple_folders(added_folders)
+        else:
+            # Just show the summary message
+            QMessageBox.information(self, "Add Folders", summary_message)
     
     def on_remove_folder(self):
         """Handle the Remove Folder action."""
@@ -466,6 +623,204 @@ class MainWindow(QMainWindow):
                     if self.thumbnail_browser.current_folder_id == folder_id:
                         self.thumbnail_browser.refresh()
     
+    def scan_multiple_folders(self, folders):
+        """Scan multiple folders for images with a single progress dialog.
+        
+        Args:
+            folders (list): List of (folder_id, folder_path) tuples to scan
+        """
+        if not folders:
+            return
+            
+        # Create a single progress dialog for all folders
+        folder_count = len(folders)
+        self.progress_dialog = ProgressDialog(
+            "Scanning Folders",
+            f"Scanning {folder_count} folders for images...",
+            self,
+            cancellable=True
+        )
+        
+        # Process one folder at a time, but track overall progress
+        total_processed = 0
+        total_failed = 0
+        total_images = 0
+        processed_folders = 0
+        
+        # Define a worker function that processes all folders
+        def process_folders_worker(progress_callback=None):
+            nonlocal total_processed, total_failed, total_images, processed_folders
+            
+            results = {}
+            
+            try:
+                # Process each folder
+                for index, (folder_id, folder_path) in enumerate(folders):
+                    # Use the progress callback to report overall progress
+                    if progress_callback:
+                        # Report overall progress - emit current folder index and total folder count
+                        progress_callback.emit(index + 1, len(folders))
+                        
+                        # Update progress dialog manually with text information
+                        if self.progress_dialog and self.progress_dialog.isVisible():
+                            self.progress_dialog.log_message(f"Starting folder {index+1} of {len(folders)}: {folder_path}")
+                    # Update progress dialog with current folder
+                    if self.progress_dialog and self.progress_dialog.isVisible():
+                        self.progress_dialog.update_operation(f"Processing folder {processed_folders + 1} of {folder_count}: {folder_path}")
+                        self.progress_dialog.log_message(f"\nStarting scan of folder: {folder_path}")
+                    
+                    # Check if the folder exists
+                    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+                        if self.progress_dialog and self.progress_dialog.isVisible():
+                            self.progress_dialog.log_message(f"Folder not found or not accessible: {folder_path}")
+                        processed_folders += 1
+                        continue
+                    
+                    # Get scanner options from settings
+                    config = self.config_manager
+                    process_new_only = config.get("scanner", "process_new_only", True)
+                    use_ai_descriptions = config.get("scanner", "use_ai_descriptions", True)
+                    use_ollama = config.get("ollama", "enabled", False)
+                    ollama_url = config.get("ollama", "url", "http://localhost:11434")
+                    ollama_model = config.get("ollama", "model", "llava")
+                    system_prompt = config.get("ollama", "system_prompt", "Describe this image concisely, start with main colors separated by comma, then the main subject and key visual elements and style at the end.")
+                    
+                    # Use the existing AI processor and image scanner already initialized in the MainWindow
+                    # No need to create new instances for every folder
+                    
+                    # Callback to update progress for this folder
+                    def folder_progress_callback(current, total):
+                        if self.progress_dialog and self.progress_dialog.isVisible():
+                            # Show both folder progress and overall progress
+                            folder_progress = f"Folder {processed_folders + 1}/{folder_count}: Image {current}/{total}"
+                            overall_progress = f"Total progress: {processed_folders}/{folder_count} folders"
+                            self.progress_dialog.update_operation(folder_progress)
+                            self.progress_dialog.update_progress(current, total)
+                    
+                    # Scan the folder using the existing image_scanner instance
+                    folder_result = self.image_scanner.scan_folder(folder_id, folder_path, folder_progress_callback)
+                    
+                    # Update totals
+                    if folder_result:
+                        total_processed += folder_result.get('processed', 0)
+                        total_failed += folder_result.get('failed', 0)
+                        total_images += folder_result.get('total', 0)
+                        
+                        # Log folder results
+                        if self.progress_dialog and self.progress_dialog.isVisible():
+                            self.progress_dialog.log_message(f"Completed folder {folder_path}")
+                            self.progress_dialog.log_message(f"    Processed: {folder_result.get('processed', 0)} images")
+                            self.progress_dialog.log_message(f"    Failed: {folder_result.get('failed', 0)} images")
+                    
+                    # Increment processed folders count
+                    processed_folders += 1
+                    
+                    # Check if the operation was cancelled
+                    if self.task_manager.is_task_cancelled("batch_scan_folders"):
+                        if self.progress_dialog and self.progress_dialog.isVisible():
+                            self.progress_dialog.log_message("Scan cancelled by user")
+                        break
+                
+                # Store final results
+                results = {
+                    'processed': total_processed,
+                    'failed': total_failed,
+                    'total': total_images,
+                    'folders_processed': processed_folders,
+                    'folders_total': folder_count
+                }
+                
+                return results
+                
+            except Exception as e:
+                logger.error(f"Error in batch folder scan: {str(e)}")
+                if self.progress_dialog and self.progress_dialog.isVisible():
+                    self.progress_dialog.log_message(f"Error scanning folders: {str(e)}")
+                return None
+        
+        # Define completion callback
+        def on_complete(results):
+            try:
+                if self.progress_dialog and self.progress_dialog.isVisible():
+                    self.progress_dialog.update_operation("Scan complete")
+                    
+                    if results:
+                        folders_processed = results.get('folders_processed', 0)
+                        folders_total = results.get('folders_total', 0)
+                        self.progress_dialog.log_message("\n=== SCAN COMPLETE ===")
+                        self.progress_dialog.log_message(f"Folders processed: {folders_processed} of {folders_total}")
+                        self.progress_dialog.log_message(f"Total images processed: {results.get('processed', 0)}")
+                        self.progress_dialog.log_message(f"Total images failed: {results.get('failed', 0)}")
+                    
+                    # Enable close button
+                    self.progress_dialog.close_when_finished()
+                
+                # Refresh the thumbnail browser
+                self.thumbnail_browser.refresh()
+                
+                # Update status bar
+                if results:
+                    self.status_bar.showMessage(f"Folders scan complete: {results.get('processed', 0)} images processed in {results.get('folders_processed', 0)} folders")
+                else:
+                    self.status_bar.showMessage("Folders scan failed or was cancelled")
+                    
+            except Exception as e:
+                logger.error(f"Error in batch scan completion callback: {str(e)}")
+            finally:
+                # Remove the task
+                self.task_manager.remove_task("batch_scan_folders")
+        
+        # Define error callback
+        def on_error(error_info):
+            try:
+                error_msg = error_info[0] if error_info and len(error_info) > 0 else "Unknown error"
+                logger.error(f"Batch scan error: {error_msg}")
+                
+                if self.progress_dialog and self.progress_dialog.isVisible():
+                    self.progress_dialog.log_message(f"Error scanning folders: {error_msg}")
+                    self.progress_dialog.close_when_finished()
+                
+                # Update status bar
+                self.status_bar.showMessage("Folders scan failed")
+                
+            except Exception as e:
+                logger.error(f"Error in batch scan error callback: {str(e)}")
+            finally:
+                # Remove the task
+                self.task_manager.remove_task("batch_scan_folders")
+        
+        # Define cancel callback
+        def on_cancel():
+            try:
+                # Mark task as cancelled
+                self.task_manager.cancel_task("batch_scan_folders")
+                
+                logger.info("Batch folder scan cancelled by user")
+                self.status_bar.showMessage("Folders scan cancelled")
+                
+                if self.progress_dialog and self.progress_dialog.isVisible():
+                    self.progress_dialog.log_message("Scan cancelled by user")
+                    self.progress_dialog.enable_close()
+                
+            except Exception as e:
+                logger.error(f"Error in batch scan cancel callback: {str(e)}")
+        
+        # Set up cancel callback
+        if self.progress_dialog:
+            self.progress_dialog.cancelled.connect(on_cancel)
+        
+        # Add the batch task to the task manager
+        self.task_manager.start_task(
+            "batch_scan_folders",
+            process_folders_worker,
+            on_result=on_complete,
+            on_error=on_error
+        )
+        
+        # Show the progress dialog
+        if self.progress_dialog:
+            self.progress_dialog.show()
+            
     def scan_folder(self, folder_id, folder_path):
         """Scan a folder for images.
         

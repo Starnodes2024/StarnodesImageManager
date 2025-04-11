@@ -312,6 +312,8 @@ class Database:
                 ai_description TEXT,
                 user_description TEXT,
                 last_scanned TIMESTAMP,
+                format TEXT,
+                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (folder_id) REFERENCES folders (folder_id)
             )
         ''')
@@ -341,6 +343,37 @@ class Database:
         ''')
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_images_search_modified_user ON images (user_description, last_modified_date DESC)
+        ''')
+        
+        # Create Catalogs table (new feature)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS catalogs (
+                catalog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create Image-Catalog mapping table (new feature)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS image_catalog_mapping (
+                mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL,
+                catalog_id INTEGER NOT NULL,
+                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (image_id) REFERENCES images (image_id) ON DELETE CASCADE,
+                FOREIGN KEY (catalog_id) REFERENCES catalogs (catalog_id) ON DELETE CASCADE,
+                UNIQUE(image_id, catalog_id)
+            )
+        ''')
+        
+        # Create indexes for the catalog tables
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_catalog_mapping_image_id ON image_catalog_mapping (image_id)
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_catalog_mapping_catalog_id ON image_catalog_mapping (catalog_id)
         ''')
         
         # Create virtual table for full-text search

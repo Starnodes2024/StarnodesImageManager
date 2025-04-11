@@ -49,10 +49,10 @@ def setup_virtual_environment():
         "pillow",          # Image processing
         "pyqt6",           # GUI framework
         "watchdog",        # File system monitoring
-        "torch",           # Deep learning framework (for AI model)
-        "transformers",    # Hugging Face transformers for the AI model
         "numpy",           # Numerical processing
         "sqlalchemy",      # Database ORM
+        "psutil",          # System utilization monitoring
+        "requests",        # HTTP requests for Ollama API
     ]
     
     for package in requirements:

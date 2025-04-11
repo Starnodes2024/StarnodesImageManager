@@ -7,7 +7,6 @@ Creates the appropriate thumbnail browser implementation based on settings
 
 import logging
 from .thumbnail_browser import ThumbnailBrowser
-from .virtualized_thumbnail_browser import VirtualizedThumbnailBrowser
 
 logger = logging.getLogger("StarImageBrowse.ui.thumbnail_browser_factory")
 

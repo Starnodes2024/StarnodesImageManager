@@ -199,6 +199,8 @@ def create_schema(conn, cursor):
             ai_description TEXT,
             user_description TEXT,
             last_scanned TIMESTAMP,
+            width INTEGER,
+            height INTEGER,
             FOREIGN KEY (folder_id) REFERENCES folders (folder_id)
         )
     ''')
@@ -216,6 +218,42 @@ def create_schema(conn, cursor):
         CREATE INDEX IF NOT EXISTS idx_images_user_description ON images (user_description)
     ''')
     
+    # Create index for image dimensions
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_images_dimensions ON images (width, height)
+    ''')
+    
+    # Create Catalogs table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS catalogs (
+            catalog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create Image-Catalog mapping table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS image_catalog_mapping (
+            mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_id INTEGER NOT NULL,
+            catalog_id INTEGER NOT NULL,
+            added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (image_id) REFERENCES images (image_id) ON DELETE CASCADE,
+            FOREIGN KEY (catalog_id) REFERENCES catalogs (catalog_id) ON DELETE CASCADE,
+            UNIQUE(image_id, catalog_id)
+        )
+    ''')
+    
+    # Create indexes for the catalog tables
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_catalog_mapping_image_id ON image_catalog_mapping (image_id)
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_catalog_mapping_catalog_id ON image_catalog_mapping (catalog_id)
+    ''')
+    
     conn.commit()
 
 def recover_data(old_db_path, new_conn, new_cursor):
@@ -231,7 +269,9 @@ def recover_data(old_db_path, new_conn, new_cursor):
     """
     recovered_stats = {
         "folders": 0,
-        "images": 0
+        "images": 0,
+        "catalogs": 0,
+        "catalog_mappings": 0
     }
     
     try:
@@ -317,14 +357,18 @@ def recover_data(old_db_path, new_conn, new_cursor):
                                 ai_description = image[9] if len(image) > 9 else None
                                 user_description = image[10] if len(image) > 10 else None
                                 
+                                # Get width and height if available
+                                width = image[12] if len(image) > 12 else None
+                                height = image[13] if len(image) > 13 else None
+                                
                                 # Insert into new database
                                 new_cursor.execute(
                                     """INSERT INTO images 
                                        (image_id, folder_id, filename, full_path, thumbnail_path, 
-                                        ai_description, user_description) 
-                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                        ai_description, user_description, width, height) 
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                     (image_id, folder_id, filename, full_path, thumbnail_path,
-                                     ai_description, user_description)
+                                     ai_description, user_description, width, height)
                                 )
                                 recovered_stats["images"] += 1
                         except Exception as e:
@@ -348,11 +392,70 @@ def recover_data(old_db_path, new_conn, new_cursor):
         except Exception as e:
             logger.warning(f"Failed to recover images: {e}")
         
+        # Try to recover catalogs
+        try:
+            old_cursor.execute("SELECT * FROM catalogs")
+            catalogs = old_cursor.fetchall()
+            
+            logger.info(f"Found {len(catalogs)} catalogs to recover")
+            
+            for catalog in catalogs:
+                try:
+                    # Ensure we have at least the required fields
+                    if len(catalog) >= 2:
+                        catalog_id = catalog[0]
+                        name = catalog[1]
+                        description = catalog[2] if len(catalog) > 2 else None
+                        created_date = catalog[3] if len(catalog) > 3 else None
+                        
+                        new_cursor.execute(
+                            """INSERT INTO catalogs 
+                               (catalog_id, name, description, created_date) 
+                               VALUES (?, ?, ?, ?)""",
+                            (catalog_id, name, description, created_date)
+                        )
+                        recovered_stats["catalogs"] += 1
+                except Exception as e:
+                    logger.warning(f"Failed to recover catalog: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to recover catalogs: {e}")
+        
+        # Try to recover catalog-image mappings
+        try:
+            old_cursor.execute("SELECT * FROM image_catalog_mapping")
+            mappings = old_cursor.fetchall()
+            
+            logger.info(f"Found {len(mappings)} catalog-image mappings to recover")
+            
+            for mapping in mappings:
+                try:
+                    # Ensure we have at least the required fields
+                    if len(mapping) >= 3:
+                        mapping_id = mapping[0]
+                        image_id = mapping[1]
+                        catalog_id = mapping[2]
+                        added_date = mapping[3] if len(mapping) > 3 else None
+                        
+                        new_cursor.execute(
+                            """INSERT INTO image_catalog_mapping 
+                               (mapping_id, image_id, catalog_id, added_date) 
+                               VALUES (?, ?, ?, ?)""",
+                            (mapping_id, image_id, catalog_id, added_date)
+                        )
+                        recovered_stats["catalog_mappings"] += 1
+                except Exception as e:
+                    logger.warning(f"Failed to recover catalog-image mapping: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to recover catalog-image mappings: {e}")
+        
         # Close old connection
         old_conn.close()
         
     except Exception as e:
         logger.warning(f"Failed to connect to corrupted database for recovery: {e}")
+    
+    # Log recovery statistics
+    logger.info(f"Recovery statistics: {recovered_stats}")
     
     return recovered_stats
 
@@ -377,6 +480,38 @@ def check_and_repair_if_needed(db_path, parent_widget=None):
         return repair_database(db_path, parent_widget)
     
     return False
+
+def check_and_repair_database(db_path):
+    """Check database integrity and repair if needed. Optimized for programmatic use in maintenance tools.
+    
+    Args:
+        db_path (str): Path to the database file
+        
+    Returns:
+        tuple: (repair_needed, result_message) - whether repair was needed and result description
+    """
+    # First check if the database exists
+    if not os.path.exists(db_path):
+        return False, "Database file does not exist"
+    
+    # Check database integrity first
+    integrity_result = check_database_integrity(db_path)
+    
+    if integrity_result is True:
+        # Database is fine, no repair needed
+        logger.info("Database integrity check passed, no repair needed")
+        return False, "Database integrity check passed"
+        
+    # Database is corrupted or check failed, attempt repair
+    logger.warning("Database corruption detected, attempting repair")
+    
+    # Use our headless rebuild function
+    rebuild_success = rebuild_database(db_path)
+    
+    if rebuild_success:
+        return True, "Database was successfully repaired"
+    else:
+        return True, "Repair attempt made but some data may not have been recovered"
 
 def rebuild_database(db_path):
     """Rebuild a corrupted database from scratch without UI interaction.

@@ -46,7 +46,7 @@ class BatchProcessor:
         self.cancel_event.clear()
         
         # Get all images for the folder
-        images = self.db_manager.get_images_for_folder(folder_id, limit=100000)
+        images = self.db_manager.get_images_for_folder(folder_id, limit=1000000)
         
         # Filter images that need processing
         images_to_process = []

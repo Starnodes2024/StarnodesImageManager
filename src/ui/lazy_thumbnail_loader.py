@@ -47,26 +47,30 @@ class ThumbnailLoadTask(QRunnable):
                 self.signals.error.emit(self.image_id, "Thumbnail file not found")
                 return
             
-            # Load the image
-            pixmap = QPixmap(self.thumbnail_path)
-            if pixmap.isNull():
+            # Load the image using a method that doesn't cause UI flickering
+            # Use QImage first and then convert to QPixmap to prevent UI flicker
+            img = QImage(self.thumbnail_path)
+            if img.isNull():
                 self.signals.error.emit(self.image_id, "Failed to load thumbnail")
                 return
             
             # Scale if needed using a simpler method that doesn't rely on Qt enums
             max_width, max_height = self.max_size
-            if pixmap.width() > max_width or pixmap.height() > max_height:
+            if img.width() > max_width or img.height() > max_height:
                 # Calculate the scaling factor to maintain aspect ratio
-                width_ratio = max_width / pixmap.width()
-                height_ratio = max_height / pixmap.height()
+                width_ratio = max_width / img.width()
+                height_ratio = max_height / img.height()
                 scale_ratio = min(width_ratio, height_ratio)
                 
                 # Calculate new dimensions
-                new_width = int(pixmap.width() * scale_ratio)
-                new_height = int(pixmap.height() * scale_ratio)
+                new_width = int(img.width() * scale_ratio)
+                new_height = int(img.height() * scale_ratio)
                 
-                # Scale the pixmap
-                pixmap = pixmap.scaled(new_width, new_height)
+                # Scale the image
+                img = img.scaled(new_width, new_height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            
+            # Convert to QPixmap only at the end
+            pixmap = QPixmap.fromImage(img)
             
             # Emit the loaded pixmap
             self.signals.finished.emit(self.image_id, pixmap)

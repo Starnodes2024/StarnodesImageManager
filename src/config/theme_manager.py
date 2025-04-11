@@ -60,7 +60,11 @@ class ThemeManager(QObject):
             
             # Get current theme from config or use default
             if self.config_manager:
-                self.current_theme_id = self.config_manager.get("ui", "theme", self.default_theme_id)
+                # First try to get theme from the app section (where it's defined in default config)
+                self.current_theme_id = self.config_manager.get("app", "theme", self.default_theme_id)
+                # For backward compatibility, also check the ui section
+                if self.current_theme_id == self.default_theme_id:
+                    self.current_theme_id = self.config_manager.get("ui", "theme", self.default_theme_id)
             else:
                 self.current_theme_id = self.default_theme_id
             
@@ -394,6 +398,66 @@ class ThemeManager(QObject):
                     }}
                 """
                 stylesheet.append(input_style)
+            
+            # Radio buttons and checkboxes
+            if "input" in colors:
+                # Use primary application accent color for checkbox/radio buttons
+                accent_color = colors.get('primary', {}).get('accent', '#000000')
+                checkbox_style = f"""
+                    QCheckBox, QRadioButton {{
+                        background-color: transparent;
+                        color: {colors['input'].get('text', '#333333')};
+                        spacing: 6px;
+                        padding: 3px;
+                    }}
+                    
+                    QCheckBox:hover, QRadioButton:hover {{
+                        color: {colors['input'].get('text', '#333333')};
+                    }}
+                    
+                    QCheckBox::indicator, QRadioButton::indicator {{
+                        width: 16px;
+                        height: 16px;
+                        border: 0px solid {colors['input'].get('border', '#c0c0c0')};
+                        background-color: {colors['input'].get('background', '#000000')};
+                    }}
+                    
+                    QCheckBox::indicator {{
+                        border-radius: 2px;
+                    }}
+                    
+                    QRadioButton::indicator {{
+                        border-radius: 2px;
+                    }}
+                    
+                    QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+                        background-color: {accent_color};
+                        border: 1px solid {accent_color};
+                    }}
+                    
+                    QCheckBox::indicator:checked {{
+                        image: url(designs/icons/checkmark.png);
+                    }}
+                    
+                    QRadioButton::indicator:checked {{
+                        border: 4px solid {accent_color};
+                        background-color: white;
+                    }}
+                    
+                    QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+                        border: 1px solid {accent_color};
+                    }}
+                    
+                    QCheckBox:disabled, QRadioButton:disabled {{
+                        color: #aaaaaa;
+                    }}
+                    
+                    QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+                        border: 1px solid #d0d0d0;
+                        background-color: #f0f0f0;
+                    }}
+                """
+                stylesheet.append(checkbox_style)
             
             # Scroll bars
             if "scrollBar" in colors:

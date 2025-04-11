@@ -165,6 +165,19 @@ class ImageScanner:
             if not file_hash:
                 logger.warning(f"Failed to compute file hash: {file_path}")
                 # Continue processing even without hash
+                
+            # Extract image dimensions and format using PIL
+            width = None
+            height = None
+            image_format = None
+            try:
+                from PIL import Image
+                with Image.open(file_path) as img:
+                    width, height = img.size
+                    image_format = img.format  # Get the image format (JPEG, PNG, etc.)
+                    logger.debug(f"Extracted dimensions {width}×{height} and format {image_format} from {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to extract dimensions and format from {file_path}: {e}")
             
             # Generate thumbnail
             try:
@@ -192,8 +205,16 @@ class ImageScanner:
                     file_size=file_size,
                     file_hash=file_hash,
                     thumbnail_path=thumbnail_path,
-                    ai_description=ai_description
+                    ai_description=ai_description,
+                    image_format=image_format
                 )
+                
+                # Update image dimensions if extracted successfully
+                if image_id and width and height and hasattr(self.db_manager, 'enhanced_search'):
+                    try:
+                        self.db_manager.enhanced_search.update_image_dimensions(image_id, width, height)
+                    except Exception as e:
+                        logger.warning(f"Failed to update dimensions in database: {e}")
                 
                 if not image_id:
                     logger.warning(f"Failed to add image to database: {file_path}")
@@ -208,7 +229,8 @@ class ImageScanner:
                 "image_id": image_id,
                 "filename": filename,
                 "thumbnail_path": thumbnail_path,
-                "ai_description": ai_description is not None
+                "ai_description": ai_description is not None,
+                "dimensions": (width, height) if width and height else None
             }
             
         except Exception as e:

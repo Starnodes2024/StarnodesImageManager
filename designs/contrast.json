@@ -86,6 +86,12 @@
     "success": {
       "text": "#ffffff",
       "background": "#000000"
+    },
+    "banner": {
+      "background": "#141417",
+      "text": "#ffffff",
+      "linkText": "#78aeff",
+      "linkHover": "#99ccff"
     }
   },
   "fonts": {
@@ -131,5 +137,8 @@
       "weight": "bold",
       "style": "normal"
     }
+  },
+  "paths": {
+    "banner": "banner.png"
   }
 }

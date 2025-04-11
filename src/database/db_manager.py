@@ -115,7 +115,7 @@ class DatabaseManager:
         """
         return self.db_ops.remove_folder(folder_id)
     
-    def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, thumbnail_path=None, ai_description=None):
+    def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, thumbnail_path=None, ai_description=None, image_format=None):
         """Add an image to the database.
         
         Args:
@@ -126,11 +126,12 @@ class DatabaseManager:
             file_hash (str, optional): Hash of the image file for deduplication
             thumbnail_path (str, optional): Path to the thumbnail image
             ai_description (str, optional): AI-generated description of the image
+            image_format (str, optional): Format of the image (JPEG, PNG, etc.)
             
         Returns:
             int: The image_id if successful, None otherwise
         """
-        return self.db_ops.add_image(folder_id, filename, full_path, file_size, file_hash, thumbnail_path, ai_description)
+        return self.db_ops.add_image(folder_id, filename, full_path, file_size, file_hash, thumbnail_path, ai_description, image_format)
     
     def update_image_description(self, image_id, ai_description=None, user_description=None, retry_count=0):
         """Update the AI or user description for an image.
@@ -175,7 +176,7 @@ class DatabaseManager:
         """
         return self.db_ops.search_images_in_folder(folder_id, query, limit, offset)
     
-    def get_images_by_date_range(self, from_date, to_date, limit=1000, offset=0):
+    def get_images_by_date_range(self, from_date, to_date, limit=1000000, offset=0):
         """Get images within a specific date range.
         
         Args:
@@ -189,7 +190,7 @@ class DatabaseManager:
         """
         return self.db_ops.get_images_by_date_range(from_date, to_date, limit, offset)
     
-    def get_all_images(self, limit=1000, offset=0):
+    def get_all_images(self, limit=10000000, offset=0):
         """Get all images from all enabled folders.
         
         Args:
@@ -208,6 +209,39 @@ class DatabaseManager:
             int: Total number of images
         """
         return self.db_ops.get_image_count()
+        
+    def get_image_count_for_folder(self, folder_id):
+        """Get the number of images in a specific folder.
+        
+        Args:
+            folder_id (int): ID of the folder to count images for
+            
+        Returns:
+            int: Number of images in the folder
+        """
+        return self.db_ops.get_image_count_for_folder(folder_id)
+        
+    def get_folder_by_id(self, folder_id):
+        """Get a folder by its ID.
+        
+        Args:
+            folder_id (int): ID of the folder to get
+            
+        Returns:
+            dict: Folder data or None if not found
+        """
+        return self.db_ops.get_folder_by_id(folder_id)
+        
+    def get_image_count_for_catalog(self, catalog_id):
+        """Get the number of images in a specific catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to count images for
+            
+        Returns:
+            int: Number of images in the catalog
+        """
+        return self.db_ops.get_image_count_for_catalog(catalog_id)
     
     def get_images_for_folder(self, folder_id, limit=100, offset=0):
         """Get images for a specific folder.
@@ -336,3 +370,95 @@ class DatabaseManager:
         if image and 'ai_description' in image:
             return image['ai_description']
         return None
+        
+    # Catalog operations (new feature)
+    
+    def create_catalog(self, name, description=""):
+        """Create a new catalog.
+        
+        Args:
+            name (str): Name of the catalog
+            description (str, optional): Description of the catalog
+            
+        Returns:
+            int: The catalog_id if successful, None otherwise
+        """
+        return self.db_ops.create_catalog(name, description)
+    
+    def get_catalogs(self):
+        """Get all catalogs.
+        
+        Returns:
+            list: List of catalog dictionaries with keys: catalog_id, name, description, created_date
+        """
+        return self.db_ops.get_catalogs()
+    
+    def add_image_to_catalog(self, image_id, catalog_id):
+        """Add an image to a catalog.
+        
+        Args:
+            image_id (int): ID of the image to add
+            catalog_id (int): ID of the catalog to add the image to
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.db_ops.add_image_to_catalog(image_id, catalog_id)
+    
+    def remove_image_from_catalog(self, image_id, catalog_id):
+        """Remove an image from a catalog.
+        
+        Args:
+            image_id (int): ID of the image to remove
+            catalog_id (int): ID of the catalog to remove the image from
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.db_ops.remove_image_from_catalog(image_id, catalog_id)
+    
+    def get_images_for_catalog(self, catalog_id, limit=1000000, offset=0):
+        """Get images for a specific catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to get images for
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries in the catalog
+        """
+        return self.db_ops.get_images_for_catalog(catalog_id, limit, offset)
+    
+    def get_catalog_by_id(self, catalog_id):
+        """Get a catalog by its ID.
+        
+        Args:
+            catalog_id (int): ID of the catalog to get
+            
+        Returns:
+            dict: Catalog data or None if not found
+        """
+        return self.db_ops.get_catalog_by_id(catalog_id)
+    
+    def delete_catalog(self, catalog_id):
+        """Delete a catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to delete
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.db_ops.delete_catalog(catalog_id)
+    
+    def get_catalogs_for_image(self, image_id):
+        """Get all catalogs that an image belongs to.
+        
+        Args:
+            image_id (int): ID of the image
+            
+        Returns:
+            list: List of catalog dictionaries for the image
+        """
+        return self.db_ops.get_catalogs_for_image(image_id)

@@ -470,7 +470,33 @@ class DatabaseOptimizer:
                 ai_description TEXT,
                 user_description TEXT,
                 last_scanned TIMESTAMP,
+                width INTEGER,
+                height INTEGER,
+                format TEXT,
+                date_added TIMESTAMP,
                 FOREIGN KEY (folder_id) REFERENCES folders (folder_id)
+            )
+        ''')
+        
+        # Create catalogs table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS catalogs (
+                catalog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                created_date TIMESTAMP
+            )
+        ''')
+        
+        # Create image_catalog_mapping table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS image_catalog_mapping (
+                mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER,
+                catalog_id INTEGER,
+                added_date TIMESTAMP,
+                FOREIGN KEY (image_id) REFERENCES images (image_id),
+                FOREIGN KEY (catalog_id) REFERENCES catalogs (catalog_id)
             )
         ''')
         
@@ -485,6 +511,14 @@ class DatabaseOptimizer:
         ''')
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_images_user_description ON images (user_description)
+        ''')
+        
+        # Create indexes for catalog mappings
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_catalog_mapping_image_id ON image_catalog_mapping (image_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_catalog_mapping_catalog_id ON image_catalog_mapping (catalog_id)
         ''')
         
         conn.commit()
@@ -554,12 +588,20 @@ class DatabaseOptimizer:
                     
                 for image in images:
                     image_dict = dict(image)
+                    
+                    # Check if additional columns exist in the source database
+                    width = image_dict.get('width')
+                    height = image_dict.get('height')
+                    format_value = image_dict.get('format')
+                    date_added = image_dict.get('date_added')
+                    
                     dest_cursor.execute(
                         """INSERT INTO images (
                             image_id, folder_id, filename, full_path, file_size, file_hash,
                             creation_date, last_modified_date, thumbnail_path,
-                            ai_description, user_description, last_scanned
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            ai_description, user_description, last_scanned,
+                            width, height, format, date_added
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             image_dict['image_id'],
                             image_dict['folder_id'],
@@ -572,7 +614,11 @@ class DatabaseOptimizer:
                             image_dict['thumbnail_path'],
                             image_dict['ai_description'],
                             image_dict['user_description'],
-                            image_dict['last_scanned']
+                            image_dict['last_scanned'],
+                            width,
+                            height,
+                            format_value,
+                            date_added
                         )
                     )
                 
@@ -586,6 +632,48 @@ class DatabaseOptimizer:
                 
                 offset += batch_size
                 dest_conn.commit()  # Commit each batch
+            
+            # Copy catalogs
+            try:
+                logger.info("Copying catalogs...")
+                source_cursor.execute("SELECT * FROM catalogs")
+                catalogs = source_cursor.fetchall()
+                
+                for catalog in catalogs:
+                    catalog_dict = dict(catalog)
+                    dest_cursor.execute(
+                        "INSERT INTO catalogs (catalog_id, name, description, created_date) VALUES (?, ?, ?, ?)",
+                        (
+                            catalog_dict['catalog_id'],
+                            catalog_dict['name'],
+                            catalog_dict['description'],
+                            catalog_dict['created_date']
+                        )
+                    )
+                logger.info(f"Copied {len(catalogs)} catalogs")
+                
+                # Copy image_catalog_mapping
+                logger.info("Copying catalog mappings...")
+                source_cursor.execute("SELECT * FROM image_catalog_mapping")
+                mappings = source_cursor.fetchall()
+                
+                for mapping in mappings:
+                    mapping_dict = dict(mapping)
+                    dest_cursor.execute(
+                        "INSERT INTO image_catalog_mapping (mapping_id, image_id, catalog_id, added_date) VALUES (?, ?, ?, ?)",
+                        (
+                            mapping_dict['mapping_id'],
+                            mapping_dict['image_id'],
+                            mapping_dict['catalog_id'],
+                            mapping_dict['added_date']
+                        )
+                    )
+                logger.info(f"Copied {len(mappings)} catalog mappings")
+            except sqlite3.Error as e:
+                # Do not fail if catalog tables don't exist in source, they might be new
+                logger.warning(f"Could not copy catalog data: {e} - this might be expected if upgrading from an older version")
+            
+            dest_conn.commit()
             
             # Close source connection
             source_conn.close()

@@ -23,7 +23,7 @@ class ThumbnailWidget(QFrame):
     double_clicked = pyqtSignal(int, str)  # Signal emitted when thumbnail is double-clicked (image_id, path)
     context_menu_requested = pyqtSignal(int, object)  # Signal emitted when context menu is requested (image_id, QPoint)
     
-    def __init__(self, image_id, thumbnail_path, filename, description=None, parent=None):
+    def __init__(self, image_id, thumbnail_path, filename, description=None, original_path=None, width=None, height=None, parent=None):
         """Initialize the thumbnail widget.
         
         Args:
@@ -31,6 +31,9 @@ class ThumbnailWidget(QFrame):
             thumbnail_path (str): Path to the thumbnail image
             filename (str): Original filename of the image
             description (str, optional): Description of the image
+            original_path (str, optional): Path to the original image file
+            width (int, optional): Width of the image in pixels
+            height (int, optional): Height of the image in pixels
             parent (QWidget, optional): Parent widget
         """
         super().__init__(parent)
@@ -39,8 +42,15 @@ class ThumbnailWidget(QFrame):
         self.thumbnail_path = thumbnail_path
         self.filename = filename
         self.description = description
+        self.original_path = original_path
         self.selected = False
         self.pixmap = None
+        
+        # Set image dimensions if provided (from database)
+        if width is not None and height is not None:
+            self.image_size = (width, height)
+        else:
+            self.image_size = None
         
         self.setup_ui()
     
@@ -76,22 +86,35 @@ class ThumbnailWidget(QFrame):
         self.filename_label.setMaximumHeight(40)
         layout.addWidget(self.filename_label)
         
-        # Description label (truncated with ellipsis)
+        # Image size label
+        self.size_label = QLabel()
+        self.size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Match the filename's styling
+        
+        # Set size text if available
+        if self.image_size:
+            width, height = self.image_size
+            size_text = f"{width}×{height}"
+            self.size_label.setText(size_text)
+            # Make dimensions use the same style as the filename
+            self.size_label.setStyleSheet("font-size: 9pt;")
+            logger.debug(f"Using dimensions for {self.filename}: {size_text}")  # Changed to debug level
+        else:
+            # Don't try to open image files - just show that dimensions aren't available
+            self.size_label.setText("Dimensions not available")
+            self.size_label.setStyleSheet("font-size: 8pt; font-style: italic;")
+            logger.debug(f"No dimensions available for {self.filename}")
+        
+        layout.addWidget(self.size_label)
+        
+        # We're completely removing description functionality to prevent flickering
+        # This still preserves the dimensions display which was part of the Phase 3 requirements
+        
+        # Create a hidden description label to maintain API compatibility
+        # but never show it or add it to the layout
         self.description_label = QLabel()
-        self.description_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.description_label.setWordWrap(True)
-        self.description_label.setMaximumHeight(60)
-        self.description_label.setStyleSheet("font-size: 9pt; color: #666;")
-        
-        # Set description text (with truncation)
-        if self.description:
-            # Truncate description if too long
-            max_length = 100
-            display_text = self.description[:max_length] + "..." if len(self.description) > max_length else self.description
-            self.description_label.setText(display_text)
-            self.description_label.setToolTip(self.description)  # Full description on hover
-        
-        layout.addWidget(self.description_label)
+        self.description_label.setVisible(False)
+        # Don't add it to the layout - this prevents any UI interaction that could cause flickering
         
         # Enable context menu
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -131,66 +154,84 @@ class ThumbnailWidget(QFrame):
             
         self.selected = selected
         
+        # Get app instance to access theme manager
+        app = QApplication.instance()
+        main_window = None
+        theme_colors = {}
+        
+        # Try to get theme colors from the main window's theme manager
+        if app:
+            for widget in app.topLevelWidgets():
+                if hasattr(widget, 'theme_manager'):
+                    main_window = widget
+                    theme = widget.theme_manager.get_current_theme()
+                    if theme and 'colors' in theme:
+                        if 'thumbnail' in theme['colors']:
+                            theme_colors = theme['colors']['thumbnail']
+                    break
+        
+        # Use theme colors if available, otherwise use defaults
         if selected:
-            # Use a more obvious selection style with blue background
-            # This is better than just a border because it's more visible
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #E3F2FD;
-                    border: 2px solid #2196F3;
-                    border-radius: 4px;
-                }
-                QLabel {
+            if theme_colors:
+                background = theme_colors.get('selected', '#6c06a7')
+                text_color = theme_colors.get('selectedText', 'white')
+                border_color = theme_colors.get('selectedBorder', background)
+            else:
+                # Default purple theme
+                background = '#6c06a7'
+                text_color = 'white'
+                border_color = background
+                
+            self.setStyleSheet(f"""
+                QFrame {{ 
+                    background-color: {background}; 
+                    color: {text_color}; 
+                    border-radius: 6px;
+                    border: none;
+                }}
+                QLabel {{ 
+                    color: {text_color}; 
                     background-color: transparent;
-                }
+                    border: none !important;
+                }}
             """)
         else:
-            # Reset to default style
-            self.setStyleSheet("")
+            if theme_colors:
+                background = theme_colors.get('background', 'transparent')
+                text_color = theme_colors.get('text', 'black')
+                border_color = theme_colors.get('border', '#e0e0e0')
+            else:
+                # Default clean theme
+                background = 'transparent'
+                text_color = 'black'
+                border_color = '#e0e0e0'
+                
+            self.setStyleSheet(f"""
+                QFrame {{ 
+                    background-color: {background}; 
+                    color: {text_color}; 
+                    border: 1px solid {border_color};
+                    border-radius: 6px;
+                }}
+                QLabel {{ 
+                    color: {text_color}; 
+                    background-color: transparent;
+                    border: none !important;
+                }}
+            """)
     
     def highlight_search_terms(self, search_terms):
         """Highlight search terms in the description.
         
+        This method has been disabled to prevent UI flickering.
+        It now does nothing but is kept for API compatibility.
+        
         Args:
-            search_terms (str): Search terms to highlight
+            search_terms (str): Search terms to highlight (ignored)
         """
-        if not self.description or not search_terms:
-            return
-            
-        # Escape special characters in search terms
-        escaped_terms = re.escape(search_terms)
-        
-        # Split search terms into individual words
-        terms = escaped_terms.split(r"\ ")
-        
-        # Create a copy of the description
-        highlighted_text = self.description
-        
-        # Apply highlighting using HTML
-        for term in terms:
-            if term:
-                # Case-insensitive search
-                pattern = re.compile(f"({term})", re.IGNORECASE)
-                highlighted_text = pattern.sub(r"<span style='background-color: yellow; color: black;'>\1</span>", highlighted_text)
-        
-        # Truncate with ellipsis if too long
-        max_length = 100
-        if len(highlighted_text) > max_length:
-            # Find a good breaking point (space) near the limit
-            break_point = highlighted_text.rfind(" ", 0, max_length)
-            if break_point == -1:
-                break_point = max_length
-                
-            display_text = highlighted_text[:break_point] + "..."
-        else:
-            display_text = highlighted_text
-        
-        # Set the highlighted text
-        self.description_label.setText(display_text)
-        self.description_label.setTextFormat(Qt.TextFormat.RichText)
-        
-        # Keep full description in tooltip
-        self.description_label.setToolTip(self.description)
+        # This is now a no-op function to avoid flickering
+        # We've completely removed description functionality
+        return
     
     def mousePressEvent(self, event):
         """Handle mouse press event.

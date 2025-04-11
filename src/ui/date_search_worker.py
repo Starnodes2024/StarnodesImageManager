@@ -69,7 +69,7 @@ class DateSearchWorker(QRunnable):
                 return
             
             # Use the database to find images directly - much faster than file processing
-            results = self.db_manager.get_images_by_date_range(from_date_str, to_date_str, limit=10000)
+            results = self.db_manager.get_images_by_date_range(from_date_str, to_date_str, limit=1000000)
             
             # Only check for cancellation if the user has explicitly clicked the cancel button
             if self.cancelled:

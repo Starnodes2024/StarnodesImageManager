@@ -192,7 +192,7 @@ class DatabaseOperations:
         # Then convert to os-specific path format
         return os.path.normpath(normalized)
     
-    def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, thumbnail_path=None, ai_description=None):
+    def add_image(self, folder_id, filename, full_path, file_size, file_hash=None, thumbnail_path=None, ai_description=None, image_format=None):
         """Add an image to the database.
         
         Args:
@@ -203,6 +203,7 @@ class DatabaseOperations:
             file_hash (str, optional): Hash of the image file for deduplication
             thumbnail_path (str, optional): Path to the thumbnail image
             ai_description (str, optional): AI-generated description of the image
+            image_format (str, optional): Format of the image (JPEG, PNG, etc.)
             
         Returns:
             int: The image_id if successful, None otherwise
@@ -245,12 +246,12 @@ class DatabaseOperations:
                 """INSERT INTO images (
                     folder_id, filename, full_path, file_size, file_hash,
                     creation_date, last_modified_date, thumbnail_path,
-                    ai_description, last_scanned
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ai_description, last_scanned, format, date_added
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     folder_id, filename, full_path, file_size, file_hash,
                     creation_date, last_modified_date, thumbnail_path,
-                    ai_description, datetime.now()
+                    ai_description, datetime.now(), image_format, datetime.now()
                 )
             )
             if not cursor:
@@ -529,7 +530,7 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
             
-    def get_images_for_folder(self, folder_id, limit=100, offset=0):
+    def get_images_for_folder(self, folder_id, limit=10000000, offset=0):
         """Get images for a specific folder.
         
         Args:
@@ -568,7 +569,7 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
 
-    def get_images_by_date_range(self, from_date, to_date, limit=1000, offset=0):
+    def get_images_by_date_range(self, from_date, to_date, limit=1000000, offset=0):
         """Get images within a specific date range.
         
         Args:
@@ -585,15 +586,14 @@ class DatabaseOperations:
             return []
             
         try:
-            # Execute query checking both creation_date and last_modified_date
-            # to be inclusive of both original and modified dates
+            # Execute query checking only last_modified_date as per Phase 3 requirements
+            # This focuses search on when the file was last modified
             cursor = conn.execute(
                 """SELECT * FROM images
-                WHERE (creation_date BETWEEN ? AND ?)
-                   OR (last_modified_date BETWEEN ? AND ?)
+                WHERE last_modified_date BETWEEN ? AND ?
                 ORDER BY last_modified_date DESC
                 LIMIT ? OFFSET ?""",
-                (from_date, to_date, from_date, to_date, limit, offset)
+                (from_date, to_date, limit, offset)
             )
             if not cursor:
                 raise Exception("Failed to get images by date range")
@@ -610,7 +610,7 @@ class DatabaseOperations:
         finally:
             conn.disconnect()
             
-    def get_all_images(self, limit=1000, offset=0):
+    def get_all_images(self, limit=10000000, offset=0):
         """Get all images from all enabled folders.
         
         Args:
@@ -691,6 +691,80 @@ class DatabaseOperations:
             
         except Exception as e:
             logger.error(f"Error counting images: {e}")
+            return 0
+            
+        finally:
+            conn.disconnect()
+            
+    def get_image_count_for_folder(self, folder_id):
+        """Get the number of images in a specific folder.
+        
+        Args:
+            folder_id (int): ID of the folder to count images for
+            
+        Returns:
+            int: Number of images in the folder
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return 0
+            
+        try:
+            if folder_id == 0:  # All folders
+                return self.get_image_count()
+                
+            # Execute query to count images in the folder
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM images WHERE folder_id = ?",
+                (folder_id,)
+            )
+            if not cursor:
+                raise Exception(f"Failed to count images for folder {folder_id}")
+                
+            result = cursor.fetchone()
+            if not result:
+                return 0
+                
+            return result['count']
+            
+        except Exception as e:
+            logger.error(f"Error counting images for folder {folder_id}: {e}")
+            return 0
+            
+        finally:
+            conn.disconnect()
+            
+    def get_image_count_for_catalog(self, catalog_id):
+        """Get the number of images in a specific catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to count images for
+            
+        Returns:
+            int: Number of images in the catalog
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return 0
+            
+        try:
+            # Execute query to count images in the catalog
+            cursor = conn.execute(
+                """SELECT COUNT(*) as count FROM image_catalog_mapping 
+                   WHERE catalog_id = ?""",
+                (catalog_id,)
+            )
+            if not cursor:
+                raise Exception(f"Failed to count images for catalog {catalog_id}")
+                
+            result = cursor.fetchone()
+            if not result:
+                return 0
+                
+            return result['count']
+            
+        except Exception as e:
+            logger.error(f"Error counting images for catalog {catalog_id}: {e}")
             return 0
             
         finally:
@@ -903,3 +977,429 @@ class DatabaseOperations:
             bool: True if the database is intact, False otherwise
         """
         return self.db.integrity_check()
+        
+    # Catalog operations (new feature)
+    
+    def create_catalog(self, name, description=""):
+        """Create a new catalog.
+        
+        Args:
+            name (str): Name of the catalog
+            description (str, optional): Description of the catalog
+            
+        Returns:
+            int: The catalog_id if successful, None otherwise
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return None
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Check if catalog already exists
+            cursor = conn.execute("SELECT catalog_id FROM catalogs WHERE name = ?", (name,))
+            if not cursor:
+                raise Exception("Failed to check if catalog exists")
+                
+            existing = cursor.fetchone()
+            if existing:
+                # Catalog already exists, just return its ID
+                conn.rollback()
+                return existing['catalog_id']
+                
+            # Add the catalog
+            cursor = conn.execute(
+                "INSERT INTO catalogs (name, description, created_date) VALUES (?, ?, ?)",
+                (name, description, datetime.now())
+            )
+            if not cursor:
+                raise Exception("Failed to insert catalog")
+                
+            # Get the new catalog ID
+            cursor = conn.execute("SELECT last_insert_rowid()")
+            if not cursor:
+                raise Exception("Failed to get last insert rowid")
+                
+            catalog_id = cursor.fetchone()[0]
+            
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            logger.info(f"Created catalog: {name} with ID: {catalog_id}")
+            return catalog_id
+            
+        except Exception as e:
+            logger.error(f"Error creating catalog: {e}")
+            conn.rollback()
+            return None
+            
+        finally:
+            conn.disconnect()
+            
+    def get_catalogs(self):
+        """Get all catalogs.
+        
+        Returns:
+            list: List of catalog dictionaries with keys: catalog_id, name, description, created_date
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            # Execute query
+            cursor = conn.execute("SELECT * FROM catalogs ORDER BY name")
+            if not cursor:
+                raise Exception("Failed to get catalogs")
+                
+            # Convert to list of dictionaries
+            catalogs = [dict(row) for row in cursor.fetchall()]
+            
+            return catalogs
+            
+        except Exception as e:
+            logger.error(f"Error getting catalogs: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+            
+    def add_image_to_catalog(self, image_id, catalog_id):
+        """Add an image to a catalog.
+        
+        Args:
+            image_id (int): ID of the image to add
+            catalog_id (int): ID of the catalog to add the image to
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return False
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Check if mapping already exists
+            cursor = conn.execute(
+                "SELECT mapping_id FROM image_catalog_mapping WHERE image_id = ? AND catalog_id = ?",
+                (image_id, catalog_id)
+            )
+            if not cursor:
+                raise Exception("Failed to check if mapping exists")
+                
+            existing = cursor.fetchone()
+            if existing:
+                # Mapping already exists
+                conn.rollback()
+                return True
+                
+            # Add the mapping
+            cursor = conn.execute(
+                "INSERT INTO image_catalog_mapping (image_id, catalog_id, added_date) VALUES (?, ?, ?)",
+                (image_id, catalog_id, datetime.now())
+            )
+            if not cursor:
+                raise Exception("Failed to insert mapping")
+                
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            logger.info(f"Added image {image_id} to catalog {catalog_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding image to catalog: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.disconnect()
+            
+    def remove_image_from_catalog(self, image_id, catalog_id):
+        """Remove an image from a catalog.
+        
+        Args:
+            image_id (int): ID of the image to remove
+            catalog_id (int): ID of the catalog to remove the image from
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return False
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Remove the mapping
+            cursor = conn.execute(
+                "DELETE FROM image_catalog_mapping WHERE image_id = ? AND catalog_id = ?",
+                (image_id, catalog_id)
+            )
+            if not cursor:
+                raise Exception("Failed to delete mapping")
+                
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            logger.info(f"Removed image {image_id} from catalog {catalog_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing image from catalog: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.disconnect()
+            
+    def get_images_for_catalog(self, catalog_id, limit=10000000, offset=0):
+        """Get images for a specific catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to get images for
+            limit (int, optional): Maximum number of results to return
+            offset (int, optional): Offset for pagination
+            
+        Returns:
+            list: List of image dictionaries in the catalog
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            # Execute query with join to get image details
+            query = """
+                SELECT i.* FROM images i
+                JOIN image_catalog_mapping m ON i.image_id = m.image_id
+                WHERE m.catalog_id = ?
+                ORDER BY i.last_modified_date DESC
+                LIMIT ? OFFSET ?
+            """
+            
+            cursor = conn.execute(query, (catalog_id, limit, offset))
+            if not cursor:
+                raise Exception("Failed to get images for catalog")
+                
+            # Convert to list of dictionaries
+            images = [dict(row) for row in cursor.fetchall()]
+            
+            return images
+            
+        except Exception as e:
+            logger.error(f"Error getting images for catalog: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+            
+    def get_catalog_by_id(self, catalog_id):
+        """Get a catalog by its ID.
+        
+        Args:
+            catalog_id (int): ID of the catalog to get
+            
+        Returns:
+            dict: Catalog data or None if not found
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return None
+            
+        try:
+            cursor = conn.execute("SELECT * FROM catalogs WHERE catalog_id = ?", (catalog_id,))
+            if not cursor:
+                raise Exception("Failed to get catalog")
+                
+            catalog = cursor.fetchone()
+            
+            if catalog:
+                return dict(catalog)
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting catalog by ID: {e}")
+            return None
+            
+        finally:
+            conn.disconnect()
+            
+    def delete_catalog(self, catalog_id):
+        """Delete a catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to delete
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return False
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Delete mappings first (should happen automatically with ON DELETE CASCADE)
+            cursor = conn.execute("DELETE FROM image_catalog_mapping WHERE catalog_id = ?", (catalog_id,))
+            if not cursor:
+                raise Exception("Failed to delete catalog mappings")
+                
+            # Delete catalog
+            cursor = conn.execute("DELETE FROM catalogs WHERE catalog_id = ?", (catalog_id,))
+            if not cursor:
+                raise Exception("Failed to delete catalog")
+                
+            # Check if any rows were affected
+            if cursor.rowcount == 0:
+                logger.warning(f"Catalog with ID {catalog_id} not found")
+                conn.rollback()
+                return False
+                
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            logger.info(f"Deleted catalog {catalog_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting catalog: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.disconnect()
+            
+    def get_folder_by_id(self, folder_id):
+        """Get a folder by its ID.
+        
+        Args:
+            folder_id (int): ID of the folder to get
+            
+        Returns:
+            dict: Folder data or None if not found
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return None
+            
+        try:
+            # Execute query
+            cursor = conn.execute("SELECT * FROM folders WHERE folder_id = ?", (folder_id,))
+            if not cursor:
+                raise Exception("Failed to get folder")
+                
+            # Get the folder data
+            folder = cursor.fetchone()
+            if not folder:
+                logger.warning(f"Folder with ID {folder_id} not found")
+                return None
+                
+            return dict(folder)
+            
+        except Exception as e:
+            logger.error(f"Error getting folder by ID: {e}")
+            return None
+            
+        finally:
+            conn.disconnect()
+    
+    def get_catalogs_for_image(self, image_id):
+        """Get all catalogs that an image belongs to.
+        
+        Args:
+            image_id (int): ID of the image
+            
+        Returns:
+            list: List of catalog dictionaries for the image
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return []
+            
+        try:
+            query = """
+                SELECT c.* FROM catalogs c
+                JOIN image_catalog_mapping m ON c.catalog_id = m.catalog_id
+                WHERE m.image_id = ?
+                ORDER BY c.name
+            """
+            
+            cursor = conn.execute(query, (image_id,))
+            if not cursor:
+                raise Exception("Failed to get catalogs for image")
+                
+            # Convert to list of dictionaries
+            catalogs = [dict(row) for row in cursor.fetchall()]
+            
+            return catalogs
+            
+        except Exception as e:
+            logger.error(f"Error getting catalogs for image: {e}")
+            return []
+            
+        finally:
+            conn.disconnect()
+        
+    def empty_database(self):
+        """Empty the database of all content while maintaining the schema structure.
+        
+        This removes all images and folders from the database but keeps the table structure.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        conn = self.db.get_connection()
+        if not conn:
+            return False
+            
+        try:
+            # Begin transaction
+            if not conn.begin_transaction():
+                raise Exception("Failed to begin transaction")
+                
+            # Delete all images first (foreign key constraint)
+            cursor = conn.execute("DELETE FROM images")
+            if not cursor:
+                raise Exception("Failed to delete images")
+                
+            # Delete all folders
+            cursor = conn.execute("DELETE FROM folders")
+            if not cursor:
+                raise Exception("Failed to delete folders")
+                
+            # Commit the transaction
+            if not conn.commit():
+                raise Exception("Failed to commit transaction")
+                
+            # Vacuum the database to reclaim space
+            self.vacuum_database()
+            
+            logger.info("Database emptied successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error emptying database: {e}")
+            conn.rollback()
+            return False
+            
+        finally:
+            conn.disconnect()

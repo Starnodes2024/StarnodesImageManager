@@ -18,227 +18,11 @@ from PyQt6.QtGui import QPixmap, QImage, QCursor, QIcon
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QThreadPool, QRunnable, QMetaObject, Q_ARG
 
 from .lazy_thumbnail_loader import LazyThumbnailLoader
+from .thumbnail_widget import ThumbnailWidget
 
 logger = logging.getLogger("StarImageBrowse.ui.thumbnail_browser")
 
-class ThumbnailWidget(QFrame):
-    """Widget for displaying a single thumbnail with its metadata."""
-    
-    clicked = pyqtSignal(int)  # Signal emitted when thumbnail is clicked (image_id)
-    double_clicked = pyqtSignal(int, str)  # Signal emitted when thumbnail is double-clicked (image_id, path)
-    context_menu_requested = pyqtSignal(int, object)  # Signal emitted when context menu is requested (image_id, QPoint)
-    
-    def __init__(self, image_id, thumbnail_path, filename, description=None, parent=None):
-        """Initialize the thumbnail widget.
-        
-        Args:
-            image_id (int): ID of the image
-            thumbnail_path (str): Path to the thumbnail image
-            filename (str): Original filename of the image
-            description (str, optional): Description of the image
-            parent (QWidget, optional): Parent widget
-        """
-        super().__init__(parent)
-        
-        self.image_id = image_id
-        self.thumbnail_path = thumbnail_path
-        self.filename = filename
-        self.description = description
-        self.selected = False
-        
-        self.setup_ui()
-    
-    def setup_ui(self):
-        """Set up the thumbnail widget UI."""
-        # Set frame style
-        self.setFrameShape(QFrame.Shape.Box)
-        self.setFrameShadow(QFrame.Shadow.Raised)
-        self.setLineWidth(1)
-        
-        # Fixed size
-        self.setFixedSize(220, 300)  # Increased height to accommodate description
-        
-        # Main layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Thumbnail image
-        self.thumbnail_label = QLabel()
-        self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.thumbnail_label.setMinimumSize(200, 200)
-        self.thumbnail_label.setMaximumSize(200, 200)
-        
-        # Load thumbnail image
-        self.load_thumbnail()
-        
-        layout.addWidget(self.thumbnail_label)
-        
-        # Filename label
-        self.filename_label = QLabel(self.filename)
-        self.filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.filename_label.setWordWrap(True)
-        self.filename_label.setMaximumHeight(40)
-        layout.addWidget(self.filename_label)
-        
-        # Description label (truncated with ellipsis)
-        self.description_label = QLabel()
-        self.description_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.description_label.setWordWrap(True)
-        self.description_label.setMaximumHeight(60)
-        self.description_label.setStyleSheet("font-size: 9pt; color: #666;")
-        
-        # Set description text (with truncation)
-        if self.description:
-            # Truncate description if too long
-            max_length = 100
-            display_text = self.description[:max_length] + "..." if len(self.description) > max_length else self.description
-            self.description_label.setText(display_text)
-            self.description_label.setToolTip(self.description)  # Full description on hover
-        
-        layout.addWidget(self.description_label)
-        
-        # Enable context menu
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.on_context_menu)
-    
-    def load_thumbnail(self):
-        """Load the thumbnail image."""
-        # Show loading placeholder initially
-        self.thumbnail_label.setText("Loading...")
-        
-        # The actual loading will be done by the LazyThumbnailLoader
-        # This method is now just setting up the initial state
-    
-    def set_thumbnail(self, pixmap):
-        """Set the thumbnail pixmap.
-        
-        Args:
-            pixmap (QPixmap): The thumbnail pixmap to display, or None for error
-        """
-        if pixmap and not pixmap.isNull():
-            self.thumbnail_label.setPixmap(pixmap)
-        else:
-            # Display placeholder for missing image
-            self.thumbnail_label.setText("No Image")
-    
-    def set_selected(self, selected):
-        """Set the selected state of the thumbnail.
-        
-        Args:
-            selected (bool): Whether the thumbnail is selected
-        """
-        self.selected = selected
-        
-        if selected:
-            # Purple background with white text for better readability
-            self.setStyleSheet("""
-                ThumbnailWidget { 
-                    background-color: #6c06a7; 
-                    color: white; 
-                }
-                QLabel { 
-                    color: white; 
-                }
-            """)
-        else:
-            # Reset to default style
-            self.setStyleSheet("""
-                ThumbnailWidget { 
-                    background-color: none; 
-                    color: black; 
-                }
-                QLabel { 
-                    color: black; 
-                }
-            """)
-    
-    def highlight_search_terms(self, search_terms):
-        """Highlight search terms in the description.
-        
-        Args:
-            search_terms (str): Search terms to highlight
-        """
-        if not self.description or not search_terms:
-            return
-        
-        # Split search terms and filter out empty strings
-        terms = [term.strip() for term in search_terms.split() if term.strip()]
-        
-        if not terms:
-            return
-        
-        # Create a copy of the description for highlighting
-        highlighted_text = self.description
-        
-        # Truncate description if too long
-        max_length = 100
-        display_text = highlighted_text
-        truncated = False
-        
-        # Find the first match position to ensure we show relevant part
-        first_match_pos = float('inf')
-        for term in terms:
-            pos = highlighted_text.lower().find(term.lower())
-            if pos != -1 and pos < first_match_pos:
-                first_match_pos = pos
-        
-        # If we found a match and it's beyond our display limit
-        if first_match_pos != float('inf'):
-            # Start a bit before the match for context
-            start_pos = max(0, first_match_pos - 20)
-            if start_pos > 0:
-                display_text = "..." + highlighted_text[start_pos:]
-                truncated = True
-        
-        # Truncate the end if still too long
-        if len(display_text) > max_length:
-            display_text = display_text[:max_length] + "..."
-            truncated = True
-        
-        # Apply HTML highlighting for each term
-        html_text = display_text
-        for term in terms:
-            # Case-insensitive replacement with HTML highlighting
-            pattern = re.compile(re.escape(term), re.IGNORECASE)
-            html_text = pattern.sub(f'<span style="background-color: #FFFF66; color: black;">\g<0></span>', html_text)
-        
-        # Set the highlighted text
-        self.description_label.setText(html_text)
-        self.description_label.setTextFormat(Qt.TextFormat.RichText)
-        
-        # Set tooltip to show full description
-        if truncated or len(self.description) > max_length:
-            self.description_label.setToolTip(self.description)
-    
-    def mousePressEvent(self, event):
-        """Handle mouse press event.
-        
-        Args:
-            event: Mouse event
-        """
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.image_id)
-        
-        super().mousePressEvent(event)
-    
-    def mouseDoubleClickEvent(self, event):
-        """Handle mouse double-click event.
-        
-        Args:
-            event: Mouse event
-        """
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.double_clicked.emit(self.image_id, self.thumbnail_path)
-        
-        super().mouseDoubleClickEvent(event)
-    
-    def on_context_menu(self, point):
-        """Handle context menu request.
-        
-        Args:
-            point: Point where context menu was requested
-        """
-        self.context_menu_requested.emit(self.image_id, self.mapToGlobal(point))
+# Use the ThumbnailWidget imported from thumbnail_widget.py
 
 
 class ThumbnailBrowser(QWidget):
@@ -261,6 +45,7 @@ class ThumbnailBrowser(QWidget):
         self.db_manager = db_manager
         self.current_folder_id = None
         self.current_search_query = None
+        self.current_catalog_id = None  # Current catalog being displayed
         self.thumbnails = {}  # Dictionary of thumbnail widgets by image_id
         self.selected_thumbnails = set()  # Set of selected thumbnail image_ids
         
@@ -287,7 +72,7 @@ class ThumbnailBrowser(QWidget):
         main_layout.setContentsMargins(5, 5, 5, 5)
         
         # Header with information
-        self.header_label = QLabel("No folder selected")
+        self.header_label = QLabel("")
         main_layout.addWidget(self.header_label)
         
         # Scroll area for thumbnails
@@ -329,7 +114,7 @@ class ThumbnailBrowser(QWidget):
         self.clear_thumbnails()
         
         # Get images for this folder
-        images = self.db_manager.get_images_for_folder(folder_id, limit=1000)
+        images = self.db_manager.get_images_for_folder(folder_id, limit=1000000)
         
         if not images:
             # No images found
@@ -363,7 +148,7 @@ class ThumbnailBrowser(QWidget):
         self.clear_thumbnails()
         
         # Get search results
-        images = self.db_manager.search_images(query, limit=1000)
+        images = self.db_manager.search_images(query, limit=1000000)
         
         if not images:
             # No images found
@@ -394,11 +179,26 @@ class ThumbnailBrowser(QWidget):
             col = i % columns
             
             # Create thumbnail widget
+            # Ensure we have the full path to the original image for dimensions
+            original_path = image.get("full_path")
+            if original_path:
+                logger.debug(f"Creating thumbnail with original path: {original_path}")
+            else:
+                logger.debug(f"No original path for image ID {image['image_id']}")
+                
+            # Get dimensions from the database if available
+            width = image.get("width")
+            height = image.get("height")
+            
+            # Create the thumbnail widget with all available data
             thumbnail = ThumbnailWidget(
                 image_id=image["image_id"],
                 thumbnail_path=image["thumbnail_path"],
                 filename=image["filename"],
-                description=image.get("ai_description") or image.get("user_description")
+                description=image.get("ai_description") or image.get("user_description"),
+                original_path=original_path,
+                width=width,
+                height=height
             )
             
             # Connect signals
@@ -548,9 +348,36 @@ class ThumbnailBrowser(QWidget):
         
         # Menu actions
         copy_action = menu.addAction(f"Copy to folder... ({num_selected} selected)" if num_selected > 1 else "Copy to folder...")
+        export_action = menu.addAction(f"Export with options... ({num_selected} selected)" if num_selected > 1 else "Export with options...")
         open_action = menu.addAction(f"Open ({num_selected} selected)" if num_selected > 1 else "Open")
         locate_action = menu.addAction(f"Locate on disk ({num_selected} selected)" if num_selected > 1 else "Locate on disk")
         copy_image_action = menu.addAction(f"Copy image to clipboard ({num_selected} selected)" if num_selected > 1 else "Copy image to clipboard")
+        
+        # Add catalog-related actions
+        catalog_menu = QMenu(f"Add to Catalog ({num_selected} selected)" if num_selected > 1 else "Add to Catalog")
+        
+        # Get all catalogs
+        catalogs = self.db_manager.get_catalogs()
+        catalog_actions = []
+        
+        # Add an action for each catalog
+        for catalog in catalogs:
+            catalog_action = catalog_menu.addAction(catalog["name"])
+            catalog_actions.append((catalog_action, catalog["catalog_id"]))
+        
+        # Add a separator and "New Catalog..." option if there are any catalogs
+        if catalogs:
+            catalog_menu.addSeparator()
+        
+        # Add "New Catalog..." option
+        new_catalog_action = catalog_menu.addAction("New Catalog...")
+        
+        # Add the catalog submenu to the main menu
+        menu.addMenu(catalog_menu)
+        
+        # Add "Remove from Catalog" option if we're viewing a catalog
+        if self.current_catalog_id is not None:
+            remove_from_catalog_action = menu.addAction("Remove from Catalog")
         
         # Add description-related actions
         menu.addSeparator()
@@ -569,6 +396,8 @@ class ThumbnailBrowser(QWidget):
         # Handle selected action
         if action == copy_action:
             self.copy_selected_images()
+        elif action == export_action:
+            self.export_selected_images()
         elif action == open_action:
             self.open_selected_images()
         elif action == locate_action:
@@ -585,6 +414,47 @@ class ThumbnailBrowser(QWidget):
             self.delete_selected_images(delete_from_disk=False)
         elif action == delete_full_action:
             self.delete_selected_images(delete_from_disk=True)
+        elif 'new_catalog_action' in locals() and action == new_catalog_action:
+            self.add_to_new_catalog()
+        elif self.current_catalog_id is not None and 'remove_from_catalog_action' in locals() and action == remove_from_catalog_action:
+            self.remove_from_catalog()
+        else:
+            # Check catalog actions
+            for catalog_action, catalog_id in catalog_actions:
+                if action == catalog_action:
+                    self.add_to_catalog(catalog_id)
+                    break
+    
+    def export_selected_images(self):
+        """Export selected images with extended format options."""
+        if not self.selected_thumbnails:
+            return
+        
+        # Show export dialog to get export options
+        from PyQt6.QtWidgets import QDialog
+        from .export_dialog import ExportDialog
+        export_dialog = ExportDialog(parent=self, num_images=len(self.selected_thumbnails))
+        
+        if export_dialog.exec() == QDialog.DialogCode.Accepted:
+            # Get export options
+            export_options = export_dialog.get_export_options()
+            
+            # Get image information for all selected thumbnails
+            image_ids = list(self.selected_thumbnails)
+            images_to_export = []
+            
+            for image_id in image_ids:
+                image_info = self.db_manager.get_image_by_id(image_id)
+                if image_info and os.path.exists(image_info['full_path']):
+                    images_to_export.append(image_info)
+            
+            if not images_to_export:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Export Failed", "No valid images selected for exporting.")
+                return
+            
+            # Start the export process
+            self.start_export_process(images_to_export, export_options)
     
     def copy_selected_images(self, export_mode=False):
         """Copy selected images to a folder.
@@ -619,12 +489,249 @@ class ThumbnailBrowser(QWidget):
             QMessageBox.warning(self, "Copy Failed", "No valid images selected for copying.")
             return
             
+        # For simple copy mode (not export), we don't need to show the export dialog
+        if not export_mode:
+            self.start_copy_process(images_to_copy, dest_folder, export_mode=False)
+            
+    def start_export_process(self, images, export_options):
+        """Start the export process with the given options.
+        
+        Args:
+            images (list): List of image dictionaries to export
+            export_options (dict): Dictionary of export options from ExportDialog
+        """
+        dest_folder = export_options["destination"]
+        export_format = export_options["format"]
+        include_description = export_options["include_description"]
+        description_only = export_options["description_only"]
+        export_workflow = export_options["export_workflow"]
+        
+        # Create progress dialog
+        from .progress_dialog import ProgressDialog
+        progress_dialog = ProgressDialog(
+            "Exporting Images",
+            f"Exporting {len(images)} images to {dest_folder}...",
+            self
+        )
+        
+        # Define progress callback
+        def progress_callback(current, total, message=None):
+            progress_dialog.update_progress(current, total)
+            if message:
+                progress_dialog.update_operation(message)
+            else:
+                progress_dialog.update_operation(f"Exporting image {current} of {total}")
+        
+        # Define task completion callback
+        def on_task_complete(results):
+            # Update progress dialog
+            if results:
+                progress_dialog.update_operation("Export operation complete")
+                progress_dialog.log_message(f"Successfully exported: {results['success']} items")
+                if results['failed'] > 0:
+                    progress_dialog.log_message(f"Failed to export: {results['failed']} items")
+            else:
+                progress_dialog.log_message("Export operation failed or was cancelled")
+            
+            # Enable close button
+            progress_dialog.close_when_finished()
+        
+        # Define error callback
+        def on_task_error(error_info):
+            progress_dialog.log_message(f"Error exporting images: {error_info[0]}")
+            progress_dialog.close_when_finished()
+        
+        # Define cancel callback
+        def on_cancel():
+            progress_dialog.log_message("Export operation cancelled")
+        
+        # Show progress dialog
+        progress_dialog.cancelled.connect(on_cancel)
+        progress_dialog.show()
+        
+        # Define the export function to run in the background thread
+        def export_images_task(images, destination, export_format, include_description, description_only, export_workflow, progress_callback=None):
+            import shutil
+            import os
+            from PIL import Image
+            from src.utils.image_utils import extract_comfyui_workflow
+            
+            results = {
+                'success': 0,
+                'failed': 0,
+                'exported_files': []
+            }
+            
+            total = len(images)
+            
+            for i, image in enumerate(images):
+                try:
+                    source_path = image['full_path']
+                    filename = os.path.basename(source_path)
+                    base_name, ext = os.path.splitext(filename)
+                    
+                    # Handle description-only export
+                    if description_only:
+                        # Get description
+                        description = image.get('ai_description', '')
+                        if not description:
+                            description = image.get('user_description', '')
+                        if not description:
+                            description = "No description available for this image."
+                        
+                        # Create text file with description
+                        txt_filename = f"{base_name}.txt"
+                        txt_path = os.path.join(destination, txt_filename)
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(txt_path):
+                            txt_filename = f"{base_name}_{counter}.txt"
+                            txt_path = os.path.join(destination, txt_filename)
+                            counter += 1
+                        
+                        # Write description to file
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(description)
+                        
+                        results['exported_files'].append(txt_path)
+                        results['success'] += 1
+                        
+                        # Update progress
+                        if progress_callback:
+                            progress_callback(i + 1, total, f"Exported description: {txt_filename}")
+                            
+                        continue
+                    
+                    # Handle image export with potentially different format
+                    dest_filename = base_name
+                    if export_format == "jpg":
+                        dest_filename += ".jpg"
+                    elif export_format == "png":
+                        dest_filename += ".png"
+                    else:  # Original format
+                        dest_filename = filename
+                    
+                    dest_path = os.path.join(destination, dest_filename)
+                    
+                    # Handle duplicate filenames
+                    counter = 1
+                    orig_dest_filename = dest_filename
+                    while os.path.exists(dest_path):
+                        name_without_ext, ext = os.path.splitext(orig_dest_filename)
+                        dest_filename = f"{name_without_ext}_{counter}{ext}"
+                        dest_path = os.path.join(destination, dest_filename)
+                        counter += 1
+                    
+                    # Handle format conversion if needed
+                    if export_format in ["jpg", "png"] and os.path.splitext(source_path)[1].lower() != f".{export_format}":
+                        try:
+                            # Convert image format
+                            img = Image.open(source_path)
+                            img.save(dest_path, quality=95 if export_format == "jpg" else None)
+                        except Exception as e:
+                            logger.error(f"Error converting image format for {source_path}: {e}")
+                            # Fallback to direct copy
+                            shutil.copy2(source_path, dest_path)
+                    else:
+                        # Direct copy for original format
+                        shutil.copy2(source_path, dest_path)
+                    
+                    results['exported_files'].append(dest_path)
+                    
+                    # Handle description export if requested
+                    if include_description:
+                        # Get description
+                        description = image.get('ai_description', '')
+                        if not description:
+                            description = image.get('user_description', '')
+                        if not description:
+                            description = "No description available for this image."
+                        
+                        # Create text file with same base name
+                        txt_filename = os.path.splitext(dest_filename)[0] + ".txt"
+                        txt_path = os.path.join(destination, txt_filename)
+                        
+                        # Write description to file
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(description)
+                        
+                        results['exported_files'].append(txt_path)
+                    
+                    # Handle ComfyUI workflow export if requested
+                    if export_workflow:
+                        # Extract and save workflow
+                        workflow_filename = os.path.splitext(dest_filename)[0] + "_workflow.json"
+                        workflow_path = os.path.join(destination, workflow_filename)
+                        
+                        # Use the extract_comfyui_workflow utility function
+                        success, message, exported_path = extract_comfyui_workflow(source_path, workflow_path)
+                        
+                        if success:
+                            results['exported_files'].append(exported_path)
+                            if progress_callback:
+                                progress_callback(i + 1, total, f"Exported workflow: {workflow_filename}")
+                    
+
+                    
+                    results['success'] += 1
+                    
+                    # Update progress
+                    if progress_callback:
+                        progress_callback(i + 1, total, f"Exported: {dest_filename}")
+                        
+                except Exception as e:
+                    logger.error(f"Error exporting {image['filename']}: {str(e)}")
+                    results['failed'] += 1
+                    
+                    # Update progress with error info
+                    if progress_callback:
+                        progress_callback(i + 1, total, f"Error exporting: {os.path.basename(source_path)}")
+            
+            return results
+        
+        # Get the task manager from the parent window
+        from PyQt6.QtWidgets import QApplication
+        main_window = None
+        for widget in QApplication.topLevelWidgets():
+            if widget.__class__.__name__ == "MainWindow":
+                main_window = widget
+                break
+        
+        if main_window and hasattr(main_window, 'task_manager'):
+            # Start export operation in background thread
+            main_window.task_manager.start_task(
+                task_id=f"export_images_{id(self)}",
+                fn=export_images_task,
+                images=images,
+                destination=dest_folder,
+                export_format=export_format,
+                include_description=include_description,
+                description_only=description_only,
+                export_workflow=export_workflow,
+                progress_callback=progress_callback,
+                on_result=on_task_complete,
+                on_error=on_task_error
+            )
+        else:
+            # Fallback if task manager not available
+            QMessageBox.warning(self, "Export Failed", "Background task manager not available.")
+            progress_dialog.close()
+    
+    def start_copy_process(self, images, destination, export_mode=False):
+        """Start the copy process for the selected images.
+        
+        Args:
+            images (list): List of image dictionaries to copy
+            destination (str): Destination folder path
+            export_mode (bool): Whether this is an export operation
+        """
         # Create progress dialog
         from .progress_dialog import ProgressDialog
         operation_type = "Exporting" if export_mode else "Copying"
         progress_dialog = ProgressDialog(
             f"{operation_type} Images",
-            f"{operation_type} {len(images_to_copy)} images to {dest_folder}...",
+            f"{operation_type} {len(images)} images to {destination}...",
             self
         )
         
@@ -1035,10 +1142,149 @@ class ThumbnailBrowser(QWidget):
         # This will be connected to the batch generate descriptions method
         self.batch_generate_requested.emit(selected_ids)
     
+    def set_catalog(self, catalog_id):
+        """Display thumbnails for the specified catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to display
+        """
+        logger.info(f"Setting catalog: {catalog_id}")
+        self.clear_thumbnails()
+        
+        # Save catalog ID and clear folder ID and search query
+        self.current_catalog_id = catalog_id
+        self.current_folder_id = None
+        self.current_search_query = None
+
+        # Get catalog name
+        catalog_info = self.db_manager.get_catalog_by_id(catalog_id)
+        catalog_name = catalog_info.get("name", "Unknown") if catalog_info else "Unknown"
+        
+        # Load thumbnails for the catalog
+        images = self.db_manager.get_images_for_catalog(catalog_id)
+        
+        # Update header label to show catalog
+        self.header_label.setText(f"Catalog: {catalog_name}")
+        
+        # Add thumbnails
+        self.add_thumbnails(images)
+        
+        # Inform user
+        self.status_message.emit(f"Loaded {len(images)} image{'s' if len(images) != 1 else ''} from catalog '{catalog_name}'")
+
+    def add_to_catalog(self, catalog_id):
+        """Add selected images to a catalog.
+        
+        Args:
+            catalog_id (int): ID of the catalog to add images to
+        """
+        if not self.selected_thumbnails:
+            return
+            
+        # Get catalog info
+        catalog = self.db_manager.get_catalog_by_id(catalog_id)
+        if not catalog:
+            return
+            
+        # Add each selected image to the catalog
+        success_count = 0
+        for image_id in self.selected_thumbnails:
+            if self.db_manager.add_image_to_catalog(image_id, catalog_id):
+                success_count += 1
+                
+        # Show status message
+        self.status_message.emit(f"Added {success_count} image{'s' if success_count != 1 else ''} to catalog '{catalog['name']}'")
+    
+    def add_to_new_catalog(self):
+        """Create a new catalog and add selected images to it."""
+        if not self.selected_thumbnails:
+            return
+            
+        # Prompt for catalog name
+        catalog_name, ok = QInputDialog.getText(
+            self, "New Catalog", "Enter a name for the new catalog:"
+        )
+        
+        if not ok or not catalog_name.strip():
+            return
+            
+        # Prompt for catalog description (optional)
+        catalog_desc, ok = QInputDialog.getText(
+            self, "New Catalog", "Enter a description (optional):"
+        )
+        
+        if not ok:
+            return
+            
+        # Create the catalog
+        catalog_id = self.db_manager.create_catalog(catalog_name, catalog_desc)
+        
+        if not catalog_id:
+            QMessageBox.warning(self, "Error", "Failed to create catalog")
+            return
+            
+        # Add selected images to the catalog
+        success_count = 0
+        for image_id in self.selected_thumbnails:
+            if self.db_manager.add_image_to_catalog(image_id, catalog_id):
+                success_count += 1
+                
+        # Show status message
+        self.status_message.emit(f"Created catalog '{catalog_name}' and added {success_count} image{'s' if success_count != 1 else ''}")
+    
+    def remove_from_catalog(self):
+        """Remove selected images from the current catalog."""
+        if not self.selected_thumbnails or self.current_catalog_id is None:
+            return
+            
+        # Get catalog info
+        catalog = self.db_manager.get_catalog_by_id(self.current_catalog_id)
+        if not catalog:
+            return
+            
+        # Confirm removal
+        num_selected = len(self.selected_thumbnails)
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Removal",
+            f"Remove {num_selected} selected image{'s' if num_selected > 1 else ''} from catalog '{catalog['name']}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+            
+        # Remove each selected image from the catalog
+        success_count = 0
+        for image_id in list(self.selected_thumbnails):
+            if self.db_manager.remove_image_from_catalog(image_id, self.current_catalog_id):
+                success_count += 1
+                
+                # Remove from UI if we're viewing the catalog
+                if self.current_catalog_id is not None:
+                    if image_id in self.thumbnails:
+                        thumbnail = self.thumbnails[image_id]
+                        self.grid_layout.removeWidget(thumbnail)
+                        thumbnail.deleteLater()
+                        del self.thumbnails[image_id]
+                    
+                    # Remove from selection
+                    self.selected_thumbnails.discard(image_id)
+        
+        # Show status message
+        self.status_message.emit(f"Removed {success_count} image{'s' if success_count != 1 else ''} from catalog '{catalog['name']}'")
+        
+        # Refresh if we're viewing the catalog
+        if self.current_catalog_id is not None:
+            self.refresh()
+    
     def refresh(self):
         """Refresh the thumbnail display."""
         if self.current_folder_id is not None:
             self.set_folder(self.current_folder_id)
+        elif self.current_catalog_id is not None:
+            self.set_catalog(self.current_catalog_id)
         elif self.current_search_query is not None:
             self.search(self.current_search_query)
         else:

@@ -22,14 +22,36 @@ sys.path.insert(0, current_dir)
 log_dir = os.path.join(current_dir, "logs")
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler()
-    ]
-)
+
+# Configure root logger with handlers
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Clear any existing handlers
+for handler in root_logger.handlers[:]: 
+    root_logger.removeHandler(handler)
+
+# Create file handler for all logs (INFO and above)
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+root_logger.addHandler(file_handler)
+
+# Create console handler with higher log level (only WARNING and above)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)  # Only show warnings and errors in console
+console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+root_logger.addHandler(console_handler)
+
+# Clean old log files, keeping only the 5 most recent
+log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.startswith("app_") and f.endswith(".log")], 
+                   key=os.path.getctime, reverse=True)
+for old_log in log_files[5:]:  # Keep 5 most recent logs
+    try:
+        os.remove(old_log)
+    except Exception as e:
+        print(f"Warning: Could not remove old log file {old_log}: {e}")
+
 logger = logging.getLogger("STARNODESImageManager")
 
 def activate_virtual_environment():
@@ -221,7 +243,7 @@ def main():
     def create_main_window():
         try:
             main_window = MainWindow(db_manager)
-            main_window.setWindowTitle("STARNODES Image Manager V0.9.5")
+            main_window.setWindowTitle("STARNODES Image Manager V0.9.6")
             
             # Set up key position and size
             desktop = app.primaryScreen().availableGeometry()
@@ -295,32 +317,12 @@ def main():
             self.wizard = None
         
         def start(self):
-            # Show setup wizard if needed, otherwise show main window directly
-            if is_first_run or not data_exists:
-                self.show_setup_wizard()
-            else:
-                self.show_main_window()
+            # Setup wizard was removed as per PROGRESS.md (2025-04-06)
+            # Always show main window directly
+            self.show_main_window()
         
-        def show_setup_wizard(self):
-            try:
-                # Import wizard
-                from src.ui.setup_wizard import SetupWizard
-                
-                # Create wizard
-                logger.info("Creating setup wizard")
-                self.wizard = SetupWizard(db_manager)
-                
-                # Connect signals
-                self.wizard.setup_complete.connect(self.on_setup_complete)
-                
-                # Show the wizard
-                logger.info("Showing setup wizard")
-                self.wizard.show()
-                
-            except Exception as e:
-                logger.error(f"Error showing setup wizard: {e}")
-                # Fallback to main window
-                self.show_main_window()
+        # Setup wizard method removed as it's no longer used (per PROGRESS.md 2025-04-06)
+        # "Removed setup wizard and replaced with default configuration"
         
         def on_setup_complete(self, settings):
             logger.info("Setup wizard completed, creating main window directly")
@@ -382,30 +384,36 @@ def main():
                             # Store reference to resource manager
                             batch_operations.resource_manager = resource_manager
                             
-                            # Store original method
-                            if hasattr(batch_operations, 'process_batch'):
-                                original_process_batch = batch_operations.process_batch
+                            # Skip checking for process_batch method directly, as per PROGRESS.md
+                            # this has been refactored to use task_manager directly
+                            
+                            # Create optimized batch processing function with resource management
+                            def process_batch_with_resource_management(operation_type, items, **kwargs):
+                                """Process a batch operation with resource management."""
+                                # Estimate memory usage based on number of items and operation type
+                                estimated_size_mb = len(items) * 5  # Rough estimate of 5MB per item
                                 
-                                # Create optimized batch processing function with resource management
-                                def process_batch_with_resource_management(operation_type, items, **kwargs):
-                                    """Process a batch operation with resource management."""
-                                    # Estimate memory usage based on number of items and operation type
-                                    estimated_size_mb = len(items) * 5  # Rough estimate of 5MB per item
-                                    
-                                    # Create batch operation context
-                                    with resource_manager.create_batch_context(f"Batch {operation_type}", estimated_size_mb):
-                                        # Call original method
-                                        if original_process_batch:
-                                            return original_process_batch(operation_type, items, **kwargs)
+                                # Create batch operation context
+                                with resource_manager.create_batch_context(f"Batch {operation_type}", estimated_size_mb):
+                                    # Call appropriate task manager methods based on operation type
+                                    if hasattr(batch_operations, 'task_manager'):
+                                        if operation_type == 'ai_description':
+                                            return batch_operations.task_manager.process_batch_ai_descriptions(items)
+                                        elif operation_type == 'thumbnail':
+                                            return batch_operations.task_manager.process_batch_thumbnails(items)
                                         else:
-                                            logger.error("Original process_batch method not found")
-                                            return None
-                                
-                                # Replace the original method
-                                batch_operations.process_batch = process_batch_with_resource_management
-                                logger.info("Integrated resource manager with batch operations")
-                            else:
-                                logger.warning("Could not find process_batch method in batch operations")
+                                            # For other operations, delegate to existing methods
+                                            method_name = f"process_{operation_type}"
+                                            if hasattr(batch_operations, method_name):
+                                                method = getattr(batch_operations, method_name)
+                                                return method(items, **kwargs)
+                                    
+                                    # If we got here, we couldn't process the batch
+                                    return None
+                            
+                            # Add the resource-managed batch processor if not already present
+                            batch_operations.process_batch_with_resources = process_batch_with_resource_management
+                            logger.info("Integrated resource manager with batch operations")
                     except Exception as e:
                         logger.error(f"Failed to integrate resource manager with batch operations: {e}")
                     # Store reference to prevent garbage collection

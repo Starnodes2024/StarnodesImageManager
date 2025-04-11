@@ -139,6 +139,8 @@ def create_schema(conn, cursor):
             ai_description TEXT,
             user_description TEXT,
             last_scanned TIMESTAMP,
+            width INTEGER,
+            height INTEGER,
             FOREIGN KEY (folder_id) REFERENCES folders (folder_id)
         )
     ''')
@@ -154,6 +156,11 @@ def create_schema(conn, cursor):
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_images_user_description ON images (user_description)
+    ''')
+    
+    # Create index for dimension searches
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_images_dimensions ON images (width, height)
     ''')
     
     # Create performance indexes

@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
-    QTreeWidgetItem, QPushButton, QMenu, QMessageBox
+    QTreeWidgetItem, QPushButton, QMenu, QMessageBox, QFrame
 )
 from PyQt6.QtGui import QIcon, QAction, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
@@ -46,23 +46,54 @@ class FolderPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Banner Image
+        # Banner Image and GitHub link in themed container
         app_dir = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        banner_path = app_dir / "banner.png"
+        
+        # Get theme settings
+        banner_bg_color = "#141417"  # Default if no theme found
+        banner_link_color = "#78aeff"  # Default link color
+        banner_filename = "banner.png"  # Default banner filename
+        
+        # Try to get theme colors from the main window's theme manager
+        parent_widget = self
+        while parent_widget.parent() is not None:
+            parent_widget = parent_widget.parent()
+            if hasattr(parent_widget, 'theme_manager'):
+                theme = parent_widget.theme_manager.get_current_theme()
+                if theme and 'colors' in theme:
+                    if 'banner' in theme['colors']:
+                        banner_bg_color = theme['colors']['banner'].get('background', banner_bg_color)
+                        banner_link_color = theme['colors']['banner'].get('linkText', banner_link_color)
+                if theme and 'paths' in theme:
+                    banner_filename = theme['paths'].get('banner', banner_filename)
+                break
+        
+        # Construct banner path
+        banner_path = app_dir / banner_filename
         
         if banner_path.exists():
+            # Create themed background container
+            banner_container = QFrame()
+            banner_container.setStyleSheet(f"background-color: {banner_bg_color}; padding: 10px;")
+            container_layout = QVBoxLayout(banner_container)
+            
+            # Banner image
             banner_label = QLabel()
             pixmap = QPixmap(str(banner_path))
             scaled_pixmap = pixmap.scaled(360, 340, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             banner_label.setPixmap(scaled_pixmap)
             banner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(banner_label)
+            container_layout.addWidget(banner_label)
             
-            # GitHub link
-            github_link = QLabel('<a href="https://github.com/Starnodes2024/StarnodesImageManager">Visit Github</a>')
+            # GitHub link with themed color
+            github_link = QLabel(f'<a href="https://github.com/Starnodes2024/StarnodesImageManager" style="color:{banner_link_color};">Vers 0.96 Visit Github</a>')
             github_link.setOpenExternalLinks(True)
             github_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(github_link)
+            github_link.setStyleSheet(f"color: {banner_link_color};")
+            container_layout.addWidget(github_link)
+            
+            # Add container to main layout
+            layout.addWidget(banner_container)
             
             # Add some spacing
             layout.addSpacing(10)
@@ -100,10 +131,13 @@ class FolderPanel(QWidget):
         """Refresh the folder list from the database."""
         self.folder_tree.clear()
         
+        # Get total image count
+        total_image_count = self.db_manager.get_image_count()
+        
         # Add "All Images" option at the top
-        all_images_item = QTreeWidgetItem(["All Images"])
+        all_images_item = QTreeWidgetItem([f"All Images ({total_image_count})"])
         all_images_item.setData(0, Qt.ItemDataRole.UserRole, -1)  # Special ID for All Images
-        all_images_item.setToolTip(0, "View all images across all folders")
+        all_images_item.setToolTip(0, f"View all images across all folders - {total_image_count} total images")
         self.folder_tree.addTopLevelItem(all_images_item)
         
         folders = self.db_manager.get_folders(enabled_only=False)
@@ -121,15 +155,18 @@ class FolderPanel(QWidget):
             path = folder["path"]
             enabled = folder["enabled"]
             
-            # Create folder item
-            item = QTreeWidgetItem([os.path.basename(path)])
+            # Get image count for this folder
+            image_count = self.db_manager.get_image_count_for_folder(folder_id)
+            
+            # Create folder item with image count
+            item = QTreeWidgetItem([f"{os.path.basename(path)} ({image_count})"])
             item.setData(0, Qt.ItemDataRole.UserRole, folder_id)
-            item.setToolTip(0, path)
+            item.setToolTip(0, f"{path} - {image_count} images")
             
             # Apply styling based on enabled status
             if not enabled:
                 item.setForeground(0, Qt.GlobalColor.gray)
-                item.setToolTip(0, f"{path} (disabled)")
+                item.setToolTip(0, f"{path} (disabled) - {image_count} images")
             
             self.folder_tree.addTopLevelItem(item)
         

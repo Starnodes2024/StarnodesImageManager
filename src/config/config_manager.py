@@ -204,3 +204,19 @@ class ConfigManager:
             dict: Configuration dictionary
         """
         return self.config
+        
+    def has(self, section, key):
+        """Check if a configuration key exists in a section.
+        
+        Args:
+            section (str): Configuration section
+            key (str): Configuration key
+            
+        Returns:
+            bool: True if key exists in section, False otherwise
+        """
+        try:
+            return section in self.config and key in self.config[section]
+        except Exception as e:
+            logger.error(f"Error checking configuration key: {e}")
+            return False

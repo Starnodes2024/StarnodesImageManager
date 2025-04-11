@@ -63,8 +63,8 @@ class MetadataPanel(QWidget):
         self.container_layout.setContentsMargins(10, 10, 10, 10)
         self.container_layout.setSpacing(10)
         
-        # No selection message
-        self.no_selection_label = QLabel("No image selected")
+        # Empty space for when no image is selected
+        self.no_selection_label = QLabel("")
         self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.no_selection_label.setStyleSheet("color: gray; font-style: italic;")
         self.container_layout.addWidget(self.no_selection_label)
@@ -147,8 +147,13 @@ class MetadataPanel(QWidget):
         
         # Hide no selection message and show metadata groups
         self.no_selection_label.setVisible(False)
+        self.no_selection_label.hide()  # Force hide with both methods
         self.info_group.setVisible(True)
         self.description_group.setVisible(True)
+        
+        # Force layout update to ensure message visibility changes are applied
+        self.container.updateGeometry()
+        self.container_layout.update()
         
         # Preview section removed as per user request - thumbnail is already visible in the browser
         
@@ -170,24 +175,50 @@ class MetadataPanel(QWidget):
         else:
             self.size_label.setText("Unknown")
         
-        # Update dimensions
+        # Update dimensions - try to get from the original file if not in database
         width = image_info.get("width")
         height = image_info.get("height")
+        
+        # If dimensions are not in the database, try to get them from the file
+        if not (width and height) and full_path and os.path.exists(full_path):
+            try:
+                from PIL import Image
+                with Image.open(full_path) as img:
+                    width, height = img.size
+                    logger.debug(f"Got dimensions from file: {width}×{height}")
+            except Exception as e:
+                logger.error(f"Error getting image dimensions from file: {e}")
+        
         if width and height:
             self.dimensions_label.setText(f"{width} × {height} pixels")
         else:
             self.dimensions_label.setText("Unknown")
         
-        # Update format
-        self.format_label.setText(image_info.get("format", "Unknown"))
+        # Update format - if not in database, try to get it from the file
+        format_value = image_info.get("format")
+        if not format_value and full_path and os.path.exists(full_path):
+            try:
+                from PIL import Image
+                with Image.open(full_path) as img:
+                    format_value = img.format
+                    logger.debug(f"Got format from file: {format_value}")
+            except Exception as e:
+                logger.error(f"Error getting image format from file: {e}")
+        
+        self.format_label.setText(format_value or "Unknown")
         
         # Update dates
         date_added = image_info.get("date_added")
         if date_added:
             try:
-                date_obj = datetime.fromisoformat(date_added)
+                # Handle both string and datetime objects
+                if isinstance(date_added, str):
+                    date_obj = datetime.fromisoformat(date_added)
+                else:
+                    date_obj = date_added
                 self.date_added_label.setText(date_obj.strftime("%Y-%m-%d %H:%M:%S"))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error formatting date_added: {e}")
                 self.date_added_label.setText(str(date_added))
         else:
             self.date_added_label.setText("Unknown")
@@ -195,12 +226,27 @@ class MetadataPanel(QWidget):
         last_modified = image_info.get("last_modified_date")
         if last_modified:
             try:
-                date_obj = datetime.fromisoformat(last_modified)
+                # Handle both string and datetime objects
+                if isinstance(last_modified, str):
+                    date_obj = datetime.fromisoformat(last_modified)
+                else:
+                    date_obj = last_modified
                 self.last_modified_label.setText(date_obj.strftime("%Y-%m-%d %H:%M:%S"))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error formatting last_modified_date: {e}")
                 self.last_modified_label.setText(str(last_modified))
         else:
-            self.last_modified_label.setText("Unknown")
+            # Try to get from file if available
+            if full_path and os.path.exists(full_path):
+                try:
+                    mtime = os.path.getmtime(full_path)
+                    date_obj = datetime.fromtimestamp(mtime)
+                    self.last_modified_label.setText(date_obj.strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception as e:
+                    logger.error(f"Error getting file modification time: {e}")
+                    self.last_modified_label.setText("Unknown")
+            else:
+                self.last_modified_label.setText("Unknown")
         
         # Update description
         description = image_info.get("user_description") or image_info.get("ai_description")
@@ -220,6 +266,10 @@ class MetadataPanel(QWidget):
         self.no_selection_label.setVisible(True)
         self.info_group.setVisible(False)
         self.description_group.setVisible(False)
+        
+        # Force layout update to ensure message visibility changes are applied
+        self.container.updateGeometry()
+        self.container_layout.update()
         
         # Clear all fields
         self.filename_label.clear()

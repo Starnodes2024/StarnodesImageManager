@@ -97,9 +97,7 @@ class SettingsDialog(QDialog):
             
         ui_layout.addRow("Theme:", self.theme_combo)
         
-        # Show descriptions
-        self.show_descriptions_check = QCheckBox("Show descriptions on thumbnails")
-        ui_layout.addRow("", self.show_descriptions_check)
+        # Description option removed due to UI flickering issues
         
         layout.addWidget(ui_group)
         
@@ -110,6 +108,17 @@ class SettingsDialog(QDialog):
         # Watch folders
         self.watch_folders_check = QCheckBox("Watch folders for changes")
         monitor_layout.addRow("", self.watch_folders_check)
+        
+        # Background scanning
+        self.background_scanning_check = QCheckBox("Enable background scanning for new images")
+        monitor_layout.addRow("", self.background_scanning_check)
+        
+        # Background scan interval
+        self.background_interval_spin = QSpinBox()
+        self.background_interval_spin.setRange(5, 1440)  # 5 min to 24 hours
+        self.background_interval_spin.setSuffix(" minutes")
+        self.background_interval_spin.setSingleStep(5)
+        monitor_layout.addRow("Background scan interval:", self.background_interval_spin)
         
         # Scan interval
         self.scan_interval_spin = QSpinBox()
@@ -285,9 +294,7 @@ class SettingsDialog(QDialog):
             theme = self.config_manager.get("app", "theme", "system").lower()
             self.theme_combo.setCurrentText(theme.capitalize())
         
-        self.show_descriptions_check.setChecked(
-            self.config_manager.get("ui", "show_descriptions", True)
-        )
+        # Description setting removed due to UI flickering issues
         
         self.watch_folders_check.setChecked(
             self.config_manager.get("monitor", "watch_folders", True)
@@ -295,6 +302,14 @@ class SettingsDialog(QDialog):
         
         self.scan_interval_spin.setValue(
             self.config_manager.get("monitor", "scan_interval_minutes", 30)
+        )
+        
+        # Load background scanning settings
+        self.background_scanning_check.setChecked(
+            self.config_manager.get("scanning", "enable_background_scanning", False)
+        )
+        self.background_interval_spin.setValue(
+            self.config_manager.get("scanning", "background_interval_minutes", 30)
         )
         
         # Thumbnails tab
@@ -360,9 +375,13 @@ class SettingsDialog(QDialog):
         else:
             # Fallback to simple theme selection
             self.config_manager.set("app", "theme", self.theme_combo.currentText().lower())
-        self.config_manager.set("ui", "show_descriptions", self.show_descriptions_check.isChecked())
+        # Description setting removed due to UI flickering issues
         self.config_manager.set("monitor", "watch_folders", self.watch_folders_check.isChecked())
         self.config_manager.set("monitor", "scan_interval_minutes", self.scan_interval_spin.value())
+        
+        # Save background scanning settings
+        self.config_manager.set("scanning", "enable_background_scanning", self.background_scanning_check.isChecked())
+        self.config_manager.set("scanning", "background_interval_minutes", self.background_interval_spin.value())
         
         # Thumbnails tab
         self.config_manager.set("thumbnails", "size", self.thumbnail_size_spin.value())

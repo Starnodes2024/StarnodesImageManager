@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QToolBar, QStatusBar,
     QFileDialog, QMenu, QMessageBox, QApplication, QDialog,
     QInputDialog, QListView, QTreeView, QAbstractItemView,
-    QListWidget, QListWidgetItem, QDialogButtonBox
+    QListWidget, QListWidgetItem, QDialogButtonBox, QProgressDialog
 )
 from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool
@@ -23,6 +23,7 @@ from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool
 # Local imports
 from .thumbnail_browser_factory import create_thumbnail_browser
 from .folder_panel import FolderPanel
+from .catalog_panel import CatalogPanel
 from .search_panel import SearchPanel
 from .metadata_panel import MetadataPanel
 from .progress_dialog import ProgressDialog
@@ -35,6 +36,7 @@ from .date_search_worker import DateSearchWorker
 from src.image_processing.thumbnail_generator import ThumbnailGenerator
 from src.image_processing.image_scanner import ImageScanner
 from src.ai.image_processor import AIImageProcessor
+from src.scanner.background_scanner import BackgroundScanner
 from src.config.config_manager import ConfigManager
 from src.database.db_optimization_utils import check_and_optimize_if_needed
 from src.config.theme_manager import ThemeManager
@@ -43,6 +45,9 @@ from src.processing.task_manager import get_task_manager
 from src.processing.parallel_pipeline import get_pipeline
 from src.memory.memory_utils import initialize_memory_management, get_memory_stats, cleanup_memory_pools, force_garbage_collection, get_system_memory_info
 from src.database.performance_optimizer import DatabasePerformanceOptimizer
+from src.database.enhanced_search import EnhancedSearch
+from src.ui.main_window_search_integration import integrate_enhanced_search
+from src.database.db_upgrade import upgrade_database_schema
 
 logger = logging.getLogger("STARNODESImageManager.ui")
 
@@ -83,12 +88,30 @@ class MainWindow(QMainWindow):
         app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.theme_manager.initialize(app_dir=app_dir)
         
+        # Connect background scanner signals if available
+        if hasattr(self, 'background_scanner'):
+            if hasattr(self.background_scanner, 'scan_completed'):
+                self.background_scanner.scan_completed.connect(self._update_counts_after_background_scan)
+        
         # Check if database optimization is needed
         QApplication.processEvents()  # Process events to ensure UI is displayed
         self.check_database_optimization()
         
+        # Upgrade database schema if needed to support enhanced search
+        self.upgrade_database_for_enhanced_search()
+        
         # Make sure window is displayed properly
         self.ensure_window_visible()
+        
+        # Initialize enhanced search after UI is visible
+        QApplication.processEvents()
+        self.initialize_enhanced_search()
+        
+        # Initialize database extensions and add "All Images" view functionality
+        from src.database.db_operations_extension import extend_db_operations
+        from src.ui.view_all_images import add_view_all_images_to_main_window
+        extend_db_operations(self.db_manager)
+        add_view_all_images_to_main_window(self)
     
     def init_components(self):
         """Initialize application components."""
@@ -156,9 +179,92 @@ class MainWindow(QMainWindow):
                 thumbnail_generator=self.thumbnail_generator,
                 ai_processor=self.ai_processor
             )
+            
+            # Initialize background scanner
+            self.background_scanner = BackgroundScanner(
+                self.image_scanner,
+                self.db_manager,
+                self.config_manager
+            )
+            
+            # Connect background scanner signals
+            self.background_scanner.signals.scan_started.connect(self._on_background_scan_started)
+            self.background_scanner.signals.scan_completed.connect(self._on_background_scan_completed)
+            self.background_scanner.signals.scan_error.connect(self._on_background_scan_error)
+            
+            # Start the background scanner if enabled in settings
+            if self.config_manager.get("scanning", "enable_background_scanning", False):
+                self.background_scanner.start()
         except Exception as e:
             logger.error(f"Error initializing image scanner: {e}")
-            # Show error message but continue with application
+            # Create placeholders to prevent attribute errors
+            self.image_scanner = None
+            self.background_scanner = None
+    
+    def upgrade_database_for_enhanced_search(self):
+        """Upgrade the database schema to support enhanced search functionality."""
+        try:
+            # Show status in status bar
+            if hasattr(self, 'status_bar'):
+                self.status_bar.showMessage("Upgrading database schema for enhanced search...")
+            
+            # Upgrade the database schema
+            success, message = upgrade_database_schema(self.db_manager.db_path)
+            
+            if success:
+                logger.info(f"Database schema upgrade: {message}")
+                if hasattr(self, 'status_bar'):
+                    self.status_bar.showMessage(f"Database schema upgrade: {message}", 5000)
+            else:
+                logger.error(f"Database schema upgrade failed: {message}")
+                if hasattr(self, 'status_bar'):
+                    self.status_bar.showMessage(f"Database schema upgrade failed: {message}", 5000)
+        except Exception as e:
+            logger.error(f"Error upgrading database schema: {e}")
+            # Non-critical, so continue
+            
+    def initialize_enhanced_search(self):
+        """Initialize the enhanced search functionality."""
+        try:
+            # Integrate enhanced search into the UI
+            integrate_enhanced_search(self)
+            logger.info("Enhanced search system initialized")
+        except Exception as e:
+            logger.error(f"Error initializing enhanced search: {e}")
+            # Non-critical, so continue
+            
+    def check_database_optimization(self):
+        """Check if database optimization is needed."""
+        try:
+            check_and_optimize_if_needed(self.db_manager.db_path)
+        except Exception as e:
+            logger.error(f"Error checking database optimization: {e}")
+            # Non-critical, so continue
+    
+    def ensure_window_visible(self):
+        """Ensure the main window is properly visible on the screen."""
+        try:
+            # Get screen geometry
+            screen = QApplication.primaryScreen().geometry()
+            # Make sure window is not too large for the screen
+            if self.width() > screen.width():
+                self.resize(screen.width() * 0.9, self.height())
+            if self.height() > screen.height():
+                self.resize(self.width(), screen.height() * 0.9)
+            # Center the window on the screen
+            self.setGeometry(
+                QStyle.alignedRect(
+                    Qt.LayoutDirection.LeftToRight,
+                    Qt.AlignmentFlag.AlignCenter,
+                    self.size(),
+                    screen
+                )
+            )
+            # Ensure window is visible
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            logger.error(f"Error ensuring window visibility: {e}")
             QMessageBox.warning(
                 self,
                 "Component Initialization Error",
@@ -188,6 +294,13 @@ class MainWindow(QMainWindow):
         scan_folder_action = folder_submenu.addAction("Scan Folder")
         scan_folder_action.triggered.connect(self.on_scan_folder)
         
+        # Add separator
+        folder_submenu.addSeparator()
+        
+        # Empty database action
+        empty_db_action = folder_submenu.addAction("Empty Database")
+        empty_db_action.triggered.connect(self.on_empty_database)
+        
         # File operations submenu
         file_ops_submenu = file_menu.addMenu("File Operations")
         
@@ -203,12 +316,6 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
-        
-        # --- VIEW MENU ---
-        view_menu = self.menuBar().addMenu("View")
-        
-        # Show all images action
-        view_menu.addAction("Show All Images").triggered.connect(self.show_all_images)
         
         # --- EDIT MENU ---
         edit_menu = self.menuBar().addMenu("Edit")
@@ -254,9 +361,9 @@ class MainWindow(QMainWindow):
         generate_batch_action = img_proc_submenu.addAction("Generate AI Descriptions")
         generate_batch_action.triggered.connect(self.on_batch_generate_descriptions)
         
-        # Export action
-        export_batch_action = img_proc_submenu.addAction("Export Images")
-        export_batch_action.triggered.connect(self.on_batch_export_images)
+        # Export action with enhanced options
+        export_batch_action = img_proc_submenu.addAction("Export Images...")
+        export_batch_action.triggered.connect(self.export_selected_images)
         
         # Rename action
         rename_batch_action = img_proc_submenu.addAction("Rename Images")
@@ -287,9 +394,24 @@ class MainWindow(QMainWindow):
         # Database submenu
         db_submenu = tools_menu.addMenu("Database")
         
-        # Optimize database action
-        optimize_db_action = db_submenu.addAction("Optimize & Repair Database")
-        optimize_db_action.triggered.connect(self.on_optimize_database)
+        # Comprehensive database maintenance tool
+        maintenance_action = db_submenu.addAction("Database Maintenance")
+        maintenance_action.triggered.connect(self.on_database_maintenance)
+        
+        # Dedicated database rebuild for corruption issues
+        rebuild_action = db_submenu.addAction("Rebuild Corrupted Database")
+        rebuild_action.triggered.connect(self.on_rebuild_database)
+        
+        # Add separator before export/import actions
+        db_submenu.addSeparator()
+        
+        # Export database action
+        export_db_action = db_submenu.addAction("Export Database")
+        export_db_action.triggered.connect(self.on_export_database)
+        
+        # Import database action
+        import_db_action = db_submenu.addAction("Import Database")
+        import_db_action.triggered.connect(self.on_import_database)
         
         # Settings action
         tools_menu.addSeparator()
@@ -299,7 +421,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager V0.9.5")
+        self.setWindowTitle("STARNODES Image Manager V0.9.6")
         self.setMinimumSize(1024, 768)
         
         # Create menu bar if it doesn't exist
@@ -317,18 +439,31 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(self.main_splitter)
         
-        # Left panel (folders and search)
+        # Left panel (folders, catalogs, and search)
         self.left_panel = QWidget()
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Folder browser
+        # Split panel for folders and catalogs
+        folder_catalog_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # Folder browser (top half)
         self.folder_panel = FolderPanel(self.db_manager)
-        left_layout.addWidget(self.folder_panel)
+        folder_catalog_splitter.addWidget(self.folder_panel)
+        
+        # Catalog browser (bottom half)
+        self.catalog_panel = CatalogPanel(self.db_manager)
+        folder_catalog_splitter.addWidget(self.catalog_panel)
+        
+        # Set equal sizes for folder and catalog panels
+        folder_catalog_splitter.setSizes([250, 250])
+        
+        # Add splitter to left panel
+        left_layout.addWidget(folder_catalog_splitter, 2)  # Give more weight to the folder/catalog section
         
         # Search panel
         self.search_panel = SearchPanel()
-        left_layout.addWidget(self.search_panel)
+        left_layout.addWidget(self.search_panel, 1)
         
         # Add left panel to splitter
         self.main_splitter.addWidget(self.left_panel)
@@ -345,6 +480,10 @@ class MainWindow(QMainWindow):
         # Thumbnail browser - use factory to create appropriate implementation
         self.thumbnail_browser = create_thumbnail_browser(self.db_manager, self.config_manager)
         self.right_splitter.addWidget(self.thumbnail_browser)
+        
+        # Enable pagination for the thumbnail browser to handle large image collections
+        from src.ui.pagination_integration import integrate_pagination
+        integrate_pagination(self)
         
         # Metadata panel
         self.metadata_panel = MetadataPanel(self.db_manager)
@@ -371,6 +510,10 @@ class MainWindow(QMainWindow):
         self.folder_panel.folder_selected.connect(self.on_folder_selected)
         self.folder_panel.folder_removed.connect(self.on_folder_removed)
         self.folder_panel.add_folder_requested.connect(self.on_add_folder)
+        
+        self.catalog_panel.catalog_selected.connect(self.on_catalog_selected)
+        self.catalog_panel.catalog_removed.connect(self.on_catalog_removed)
+        self.catalog_panel.catalog_added.connect(self.on_catalog_added)
         
         self.search_panel.search_requested.connect(self.on_search_requested)
         self.search_panel.date_search_requested.connect(self.on_date_search_requested)
@@ -1116,6 +1259,9 @@ class MainWindow(QMainWindow):
             
             # Update the image scanner to use the new AI processor
             self.image_scanner.ai_processor = self.ai_processor
+            
+            # Update background scanner settings
+            self.update_background_scanner_settings()
     
     def on_folder_selected(self, folder_id, folder_path):
         """Handle folder selection from the folder panel.
@@ -1127,10 +1273,10 @@ class MainWindow(QMainWindow):
         # Special case for All Images (-1)
         if folder_id == -1:
             # Update status bar
-            self.status_bar.showMessage("Viewing all images")
+            self.status_bar.showMessage("Search across all images")
             
-            # Show all images from all folders
-            self.show_all_images()
+            # Prompt for a search across all images
+            self.search_all_images()
             return
         
         # Update status bar
@@ -1152,46 +1298,147 @@ class MainWindow(QMainWindow):
         if self.thumbnail_browser.current_folder_id == folder_id:
             self.thumbnail_browser.clear_thumbnails()
             self.status_bar.showMessage("Folder removed")
+            
+    def on_catalog_selected(self, catalog_id, catalog_name):
+        """Handle catalog selection from the catalog panel.
+        
+        Args:
+            catalog_id (int): ID of the selected catalog
+            catalog_name (str): Name of the selected catalog
+        """
+        # Set the thumbnail browser to show the selected catalog
+        self.thumbnail_browser.set_catalog(catalog_id)
+        self.status_bar.showMessage(f"Viewing catalog: {catalog_name}")
+    
+    def on_catalog_removed(self, catalog_id):
+        """Handle catalog removal from the catalog panel.
+        
+        Args:
+            catalog_id (int): ID of the removed catalog
+        """
+        # Clear the thumbnail browser if it was showing this catalog
+        if hasattr(self.thumbnail_browser, 'current_catalog_id') and self.thumbnail_browser.current_catalog_id == catalog_id:
+            self.thumbnail_browser.clear_thumbnails()
+            self.status_bar.showMessage("Catalog removed")
+    
+    def on_catalog_added(self, catalog_id, catalog_name):
+        """Handle catalog addition from the catalog panel.
+        
+        Args:
+            catalog_id (int): ID of the added catalog
+            catalog_name (str): Name of the added catalog
+        """
+        # Update status bar
+        self.status_bar.showMessage(f"Added catalog: {catalog_name}")
+        
+    def on_upgrade_database_for_catalogs(self):
+        """Upgrade the database schema to support catalogs."""
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        from src.database.db_upgrade import upgrade_database_schema
+        
+        # Show confirmation dialog
+        confirm = QMessageBox.question(
+            self, "Upgrade Database",
+            "This will upgrade your database to support the Catalogs feature.\n\n"
+            "This operation is safe and will not affect your existing data.\n\n"
+            "Continue with database upgrade?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+            
+        # Update status bar
+        self.status_bar.showMessage("Upgrading database schema for Catalogs feature...")
+        QApplication.processEvents()  # Update UI
+        
+        # Perform the upgrade directly (database operations are typically fast)
+        success, message = upgrade_database_schema(self.db_manager.db_path)
+        
+        # Show result in a message box
+        if success:
+            QMessageBox.information(self, "Database Upgraded", message)
+            self.status_bar.showMessage("Database upgraded successfully")
+            
+            # Refresh the catalog panel if it exists
+            if hasattr(self, 'catalog_panel'):
+                self.catalog_panel.refresh_catalogs()
+        else:
+            QMessageBox.critical(self, "Upgrade Failed", message)
+            self.status_bar.showMessage("Database upgrade failed")
+    
+
     
     def show_all_images(self):
-        """Show all images from all folders using an optimized database query."""
-        # Clear the current folder selection
+        """Legacy method - redirects to search_all_images."""
+        self.search_all_images()
+            
+    def search_all_images(self):
+        """Prompt for search query and search across all images."""
+        # Clear the current folder selection to indicate we're searching all images
         self.current_folder_id = None
         self.thumbnail_browser.current_folder_id = None
-        self.thumbnail_browser.current_search_query = None
         
-        # Clear existing thumbnails
+        # Prompt for a search query using an input dialog
+        search_query, ok = QInputDialog.getText(
+            self,
+            "Search All Images",
+            "Enter search query:",
+            QLineEdit.EchoMode.Normal
+        )
+        
+        if not ok or not search_query.strip():
+            # User cancelled or entered empty query
+            self.status_bar.showMessage("Search cancelled")
+            
+            # Clear thumbnails and show message
+            self.thumbnail_browser.clear_thumbnails()
+            empty_label = QLabel("Please enter a search query to search across all images")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+            self.thumbnail_browser.header_label.setText("Search All Images")
+            return
+        
+        # Update status bar
+        self.status_bar.showMessage(f"Searching for: {search_query} across all images")
+        
+        # Clear thumbnails
         self.thumbnail_browser.clear_thumbnails()
         
         # Set header
-        self.thumbnail_browser.header_label.setText("All Images (Loading...)")
-        self.status_bar.showMessage("Loading all images...")
+        self.thumbnail_browser.header_label.setText(f"Searching for: {search_query} (All Images)")
         
-        # Show loading message - handle both browser types
-        loading_label = QLabel("Loading all images...")
+        # Show loading message
+        loading_label = QLabel(f"Searching for '{search_query}' across all images...")
         loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        # Check which type of browser we're using
-        if hasattr(self.thumbnail_browser, 'grid_layout'):
-            # Traditional thumbnail browser
-            self.thumbnail_browser.grid_layout.addWidget(loading_label, 0, 0)
-        else:
-            # Virtualized thumbnail browser - update the header only
-            # (virtualized browser doesn't have a grid_layout)
-            pass
-            
+        self.thumbnail_browser.grid_layout.addWidget(loading_label, 0, 0)
         QApplication.processEvents()  # Update UI
         
-        # Create a worker to load all images in the background using the optimized method
-        worker = Worker(self.load_all_images_worker)
+        # Start the search (using the optimized method)
+        images = self.db_manager.search_images(search_query, limit=1000000)
         
-        # Connect signals
-        worker.signals.result.connect(self.on_all_images_loaded)
-        worker.signals.error.connect(self.on_all_images_error)
+        # Remove loading label
+        for i in reversed(range(self.thumbnail_browser.grid_layout.count())): 
+            widget = self.thumbnail_browser.grid_layout.itemAt(i).widget()
+            if widget is not None and isinstance(widget, QLabel):
+                widget.setParent(None)
+                widget.deleteLater()
         
-        # Start the worker
-        self.status_bar.showMessage("Loading all images in background...")
-        QThreadPool.globalInstance().start(worker)
+        if not images:
+            # No images found
+            empty_label = QLabel(f"No images found for query: {search_query}")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.thumbnail_browser.grid_layout.addWidget(empty_label, 0, 0)
+            self.thumbnail_browser.header_label.setText(f"No results for: {search_query} (All Images)")
+            return
+        
+        # Update header with count
+        self.thumbnail_browser.header_label.setText(f"Search results for: {search_query} (Found {len(images)} images)")
+        
+        # Add thumbnails to browser
+        self.thumbnail_browser.add_thumbnails(images)
+        self.status_bar.showMessage(f"Found {len(images)} images matching '{search_query}'")
     
     def load_all_images_worker(self, progress_callback=None):
         """Worker function to load all images using the optimized database query.
@@ -1212,7 +1459,7 @@ class MainWindow(QMainWindow):
             # Use the optimized database query to get all images in one go
             # This is much more efficient than loading from each folder separately
             # With virtualized grid, we can safely load many more images at once
-            all_images = self.db_manager.get_all_images(limit=100000)
+            all_images = self.db_manager.get_all_images(limit=1000000)
             return all_images
             
         except Exception as e:
@@ -1262,17 +1509,31 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Error loading images: {error_message}")
         self.thumbnail_browser.header_label.setText("All Images (Error Loading)")
     
-    def on_search_requested(self, query):
+    def on_search_requested(self, query, search_all_folders=False):
         """Handle search request from the search panel.
         
         Args:
             query (str): Search query
+            search_all_folders (bool): Whether to search across all folders
         """
         # Get the current folder ID (could be None for "All Images")
         folder_id = getattr(self, 'current_folder_id', None)
         
-        # If we have a specific folder selected, search only within that folder
-        if folder_id is not None and folder_id != -1:
+        # Determine search scope based on radio button selection
+        if search_all_folders or folder_id is None or folder_id == -1:
+            # Update status bar for global search
+            self.status_bar.showMessage(f"Searching for: {query} across all folders")
+            
+            # Clear thumbnails
+            self.thumbnail_browser.clear_thumbnails()
+            
+            # Set header
+            self.thumbnail_browser.header_label.setText(f"Search results for: {query} (All Folders)")
+            
+            # Search across all folders
+            self.thumbnail_browser.search(query)
+        else:
+            # Search only within the specific folder
             folder_info = next((f for f in self.db_manager.get_folders() if f["folder_id"] == folder_id), None)
             folder_name = folder_info.get("path", "Unknown") if folder_info else "Unknown"
             
@@ -1286,7 +1547,7 @@ class MainWindow(QMainWindow):
             self.thumbnail_browser.header_label.setText(f"Search results for: {query} in folder: {os.path.basename(folder_name)}")
             
             # Search only within this folder
-            images = self.db_manager.search_images_in_folder(folder_id, query, limit=1000)
+            images = self.db_manager.search_images_in_folder(folder_id, query, limit=1000000)
             
             if not images:
                 # No images found
@@ -1297,8 +1558,6 @@ class MainWindow(QMainWindow):
             
             # Add thumbnails
             self.thumbnail_browser.add_thumbnails(images)
-        else:
-            # Update status bar for global search
             self.status_bar.showMessage(f"Searching for: {query} across all folders")
             
             # Search across all folders
@@ -2381,7 +2640,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'current_folder_id') and self.current_folder_id is not None:
                 self.on_folder_selected(self.current_folder_id, None)
             else:
-                self.show_all_images()
+                self.search_all_images()
         
         def on_error(error):
             # Close progress dialog
@@ -2522,7 +2781,7 @@ class MainWindow(QMainWindow):
             return None
     
     def export_selected_images(self):
-        """Export selected images to a folder."""
+        """Export selected images to a folder with various format options."""
         # Get selected images
         selected_images = list(self.thumbnail_browser.selected_thumbnails)
         
@@ -2532,20 +2791,244 @@ class MainWindow(QMainWindow):
                 "Please select one or more images to export."
             )
             return
+            
+        # Get image information for all selected thumbnails
+        image_ids = list(selected_images)
+        images_to_export = []
         
-        # Get export folder
-        export_folder = QFileDialog.getExistingDirectory(
-            self, "Select Export Folder", os.path.expanduser("~"),
-            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
-        )
+        for image_id in image_ids:
+            image_info = self.db_manager.get_image_by_id(image_id)
+            if image_info and os.path.exists(image_info['full_path']):
+                images_to_export.append(image_info)
         
-        if not export_folder:
+        if not images_to_export:
+            self.notification_manager.show_notification(
+                "Export Failed",
+                "No valid images selected for exporting.",
+                NotificationType.ERROR
+            )
+            return
+            
+        # Show export options dialog
+        from .export_dialog import ExportDialog
+        export_dialog = ExportDialog(self, len(images_to_export))
+        if export_dialog.exec() != QDialog.DialogCode.Accepted:
             return  # User cancelled
         
-        # TODO: Implement export functionality with progress dialog
-        self.notification_manager.show_notification(
-            "Export Feature",
-            "This feature will be implemented in a future update."
+        # Get export options
+        options = export_dialog.get_export_options()
+        dest_folder = options['destination']
+        export_format = options['format']
+        include_description = options['include_description']
+        description_only = options['description_only']
+        
+        # Create progress dialog
+        from .progress_dialog import ProgressDialog
+        progress_dialog = ProgressDialog(
+            "Exporting Images",
+            f"Exporting {len(images_to_export)} images to {dest_folder}...",
+            self
+        )
+        
+        # Define progress callback
+        def progress_callback(current, total, message=None):
+            progress_dialog.update_progress(current, total)
+            if message:
+                progress_dialog.update_operation(message)
+            else:
+                progress_dialog.update_operation(f"Exporting image {current} of {total}")
+        
+        # Define task completion callback
+        def on_task_complete(results):
+            # Update progress dialog
+            progress_dialog.update_operation("Export operation complete")
+            progress_dialog.log_message(f"Successfully exported: {results['success']} items")
+            if results['failed'] > 0:
+                progress_dialog.log_message(f"Failed to export: {results['failed']} items")
+            
+            # Enable close button
+            progress_dialog.close_when_finished()
+            
+            # Show notification
+            self.notification_manager.show_notification(
+                "Export Complete",
+                f"Successfully exported {results['success']} items\nFailed: {results['failed']}",
+                NotificationType.SUCCESS if results['failed'] == 0 else NotificationType.WARNING
+            )
+        
+        # Define error callback
+        def on_task_error(error_info):
+            progress_dialog.log_message(f"Error exporting images: {error_info[0]}")
+            progress_dialog.close_when_finished()
+            
+            # Show error notification
+            self.notification_manager.show_notification(
+                "Export Error",
+                f"Error: {error_info[0]}",
+                NotificationType.ERROR
+            )
+        
+        # Define cancel callback
+        def on_cancel():
+            progress_dialog.log_message("Export operation cancelled")
+            self.notification_manager.show_notification(
+                "Export Cancelled",
+                "The export operation was cancelled.",
+                NotificationType.INFO
+            )
+        
+        # Show progress dialog
+        progress_dialog.cancelled.connect(on_cancel)
+        progress_dialog.show()
+        
+        # Define the export function to run in the background thread
+        def export_images_task(images, destination, export_format, include_description, description_only, progress_callback=None):
+            import shutil
+            import os
+            from PIL import Image
+            
+            results = {
+                'success': 0,
+                'failed': 0,
+                'exported_files': []
+            }
+            
+            total = len(images)
+            
+            for i, image in enumerate(images):
+                try:
+                    source_path = image['full_path']
+                    filename = os.path.basename(source_path)
+                    base_name, ext = os.path.splitext(filename)
+                    
+                    # Handle description-only export
+                    if description_only:
+                        # Get description
+                        description = image.get('ai_description', '')
+                        if not description:
+                            description = image.get('user_description', '')
+                        if not description:
+                            description = "No description available for this image."
+                        
+                        # Create text file with description
+                        txt_filename = f"{base_name}.txt"
+                        txt_path = os.path.join(destination, txt_filename)
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(txt_path):
+                            txt_filename = f"{base_name}_{counter}.txt"
+                            txt_path = os.path.join(destination, txt_filename)
+                            counter += 1
+                        
+                        # Write description to file
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(description)
+                        
+                        results['success'] += 1
+                        results['exported_files'].append(txt_path)
+                        
+                        # Update progress
+                        if progress_callback:
+                            progress_callback(i + 1, total, f"Exported description: {txt_filename}")
+                            
+                        continue  # Skip to next image
+                    
+                    # Handle image export
+                    if export_format == 'original':
+                        # Keep original format
+                        dest_path = os.path.join(destination, filename)
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            new_filename = f"{base_name}_{counter}{ext}"
+                            dest_path = os.path.join(destination, new_filename)
+                            counter += 1
+                        
+                        # Copy the file
+                        shutil.copy2(source_path, dest_path)
+                        results['exported_files'].append(dest_path)
+                        
+                    else:  # Convert to jpg or png
+                        # Set new extension
+                        new_ext = '.jpg' if export_format == 'jpg' else '.png'
+                        new_filename = f"{base_name}{new_ext}"
+                        dest_path = os.path.join(destination, new_filename)
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(dest_path):
+                            new_filename = f"{base_name}_{counter}{new_ext}"
+                            dest_path = os.path.join(destination, new_filename)
+                            counter += 1
+                        
+                        # Convert and save the image
+                        with Image.open(source_path) as img:
+                            if export_format == 'jpg':
+                                # Convert to RGB for JPG (in case it's an RGBA image)
+                                if img.mode == 'RGBA':
+                                    img = img.convert('RGB')
+                                img.save(dest_path, 'JPEG', quality=95)
+                            else:  # PNG
+                                img.save(dest_path, 'PNG')
+                                
+                        results['exported_files'].append(dest_path)
+                    
+                    # Handle description export if requested
+                    if include_description:
+                        # Get description
+                        description = image.get('ai_description', '')
+                        if not description:
+                            description = image.get('user_description', '')
+                        if not description:
+                            description = "No description available for this image."
+                        
+                        # Create text file with description
+                        txt_filename = f"{base_name}.txt"
+                        txt_path = os.path.join(destination, txt_filename)
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while os.path.exists(txt_path):
+                            txt_filename = f"{base_name}_{counter}.txt"
+                            txt_path = os.path.join(destination, txt_filename)
+                            counter += 1
+                        
+                        # Write description to file
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(description)
+                        
+                        results['exported_files'].append(txt_path)
+                    
+                    results['success'] += 1
+                    
+                    # Update progress
+                    if progress_callback:
+                        progress_callback(i + 1, total, f"Exported: {os.path.basename(source_path)}")
+                        
+                except Exception as e:
+                    logger.error(f"Error exporting {image['filename']}: {str(e)}")
+                    results['failed'] += 1
+                    
+                    # Update progress with error info
+                    if progress_callback:
+                        progress_callback(i + 1, total, f"Error exporting: {os.path.basename(source_path)}")
+            
+            return results
+        
+        # Start export operation in background thread
+        self.task_manager.start_task(
+            task_id=f"export_images_{id(self)}",
+            fn=export_images_task,
+            images=images_to_export,
+            destination=dest_folder,
+            export_format=export_format,
+            include_description=include_description,
+            description_only=description_only,
+            progress_callback=progress_callback,
+            on_result=on_task_complete,
+            on_error=on_task_error
         )
     
     def rename_selected_images(self):
@@ -2695,15 +3178,966 @@ class MainWindow(QMainWindow):
         
         # Clear status bar
         self.status_bar.showMessage("Ready")
+    
+    def _on_background_scan_started(self, folder_path):
+        """Handle background scan started signal.
         
+        Args:
+            folder_path (str): Path of the folder being scanned
+        """
+        logger.info(f"Background scan started: {folder_path}")
+        # For background scans, we don't need to show a progress dialog
+        # Just update the status bar briefly
+        self.status_bar.showMessage(f"Background scan started: {os.path.basename(folder_path)}")
+    
+    def _on_background_scan_completed(self, new_images_count, folders_scanned):
+        """Handle background scan completed signal.
+        
+        Args:
+            new_images_count (int): Number of new images found
+            folders_scanned (int): Number of folders with new images
+        """
+        logger.info(f"Background scan completed: {new_images_count} new images in {folders_scanned} folders")
+        
+        # Only show a notification if new images were found
+        if new_images_count > 0:
+            self.notification_manager.show_notification(
+                "New Images Found",
+                f"Found {new_images_count} new image(s) in {folders_scanned} folder(s)",
+                NotificationType.INFO
+            )
+            
+            # Refresh the view if this is the current folder
+            if hasattr(self, 'current_folder_id'):
+                # Get folder ID for this path
+                folder_info = next((f for f in self.db_manager.get_folders() 
+                                   if f["path"] == folder_path), None)
+                if folder_info and folder_info["folder_id"] == self.current_folder_id:
+                    # Refresh view with a slight delay to ensure DB is updated
+                    QApplication.processEvents()
+                    self.refresh_current_view()
+        
+        # Reset status bar
+        self.status_bar.showMessage("Ready")
+    
+    def _on_background_scan_error(self, folder_path, error_message):
+        """Handle background scan error signal.
+        
+        Args:
+            folder_path (str): Path of the folder that was being scanned
+            error_message (str): Error message
+        """
+        logger.error(f"Background scan error in {folder_path}: {error_message}")
+        
+        # Only show a notification for significant errors, not just for individual file errors
+        if "permission" in error_message.lower() or "access" in error_message.lower():
+            self.notification_manager.show_notification(
+                "Background Scan Error",
+                f"Error scanning {os.path.basename(folder_path)}: {error_message}",
+                NotificationType.ERROR
+            )
+        
+        # Reset status bar
+        self.status_bar.showMessage("Ready")
+    
+    def update_background_scanner_settings(self):
+        """Update background scanner settings when configuration changes."""
+        if hasattr(self, 'background_scanner'):
+            self.background_scanner.update_settings()
+            
+    def on_empty_database(self):
+        """Handle the Empty Database action.
+        
+        This will remove all images and folders from the database,
+        but will not delete any files from disk.
+        """
+        # First confirmation dialog with warning message
+        confirm_msg = (
+            "WARNING: This will remove ALL images and folders from the database.\n\n"
+            "This action cannot be undone.\n"
+            "Your image files will remain on disk but all metadata and descriptions will be lost.\n\n"
+            "Are you sure you want to empty the database?"
+        )
+        
+        confirm = QMessageBox.warning(
+            self, 
+            "Empty Database Confirmation", 
+            confirm_msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if confirm != QMessageBox.StandardButton.Yes:
+            self.status_bar.showMessage("Database emptying cancelled")
+            return
+            
+        # Second confirmation with type-to-confirm pattern for extra safety
+        confirm_text, ok = QInputDialog.getText(
+            self,
+            "Final Confirmation",
+            "Type 'EMPTY' to confirm emptying the database:",
+            QLineEdit.EchoMode.Normal
+        )
+        
+        if not ok or confirm_text != "EMPTY":
+            self.status_bar.showMessage("Database emptying cancelled")
+            return
+            
+        # Show progress dialog
+        progress_dialog = ProgressDialog(
+            "Emptying Database", 
+            "Removing all data from database...", 
+            0, 100, 
+            self,
+            cancellable=False
+        )
+        progress_dialog.show()
+        QApplication.processEvents()
+        
+        try:
+            # Set progress to 25%
+            progress_dialog.set_value(25)
+            QApplication.processEvents()
+            
+            # Clear the database
+            self.db_manager.empty_database()
+            
+            # Set progress to 75%
+            progress_dialog.set_value(75)
+            QApplication.processEvents()
+            
+            # Clear thumbnails folder
+            thumbnails_dir = self.thumbnail_generator.thumbnail_dir
+            if os.path.exists(thumbnails_dir):
+                try:
+                    # Remove thumbnail files
+                    for file in os.listdir(thumbnails_dir):
+                        if file.endswith(".jpg") or file.endswith(".png"):
+                            os.unlink(os.path.join(thumbnails_dir, file))
+                except Exception as e:
+                    logger.error(f"Error clearing thumbnail directory: {e}")
+            
+            # Set progress to 100%
+            progress_dialog.set_value(100)
+            QApplication.processEvents()
+            
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Clear UI
+            self.folder_panel.refresh()
+            self.thumbnail_browser.clear_thumbnails()
+            
+            # Update header
+            self.thumbnail_browser.header_label.setText("Database Emptied")
+            
+            # Show success message
+            self.notification_manager.show_notification(
+                "Database Emptied",
+                "All images and folders have been removed from the database.",
+                NotificationType.INFO
+            )
+            self.status_bar.showMessage("Database has been emptied successfully")
+            
+        except Exception as e:
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show error message
+            logger.error(f"Error emptying database: {e}")
+            error_msg = f"An error occurred while emptying the database:\n{str(e)}"
+            
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                error_msg,
+                QMessageBox.StandardButton.Ok
+            )
+            
+            self.status_bar.showMessage("Error emptying database")
+        
+    def on_export_database(self):
+        """Handle the Export Database action.
+        
+        Exports the database to a file selected by the user.
+        """
+        # Show file dialog to select export location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Database",
+            os.path.expanduser("~"),
+            "SQLite Database Files (*.db);;All Files (*)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+            
+        # Create progress dialog
+        progress_dialog = ProgressDialog(
+            "Exporting Database",
+            "Preparing to export database...",
+            parent=self,
+            cancellable=False
+        )
+        progress_dialog.show()
+        QApplication.processEvents()
+        
+        try:
+            # Update progress
+            progress_dialog.update_progress(20, 100, "Preparing database for export...")
+            QApplication.processEvents()
+            
+            # Get database size
+            source_size = os.path.getsize(self.db_manager.db_path)
+            size_formatted = self._format_file_size(source_size)
+            
+            # Update progress
+            progress_dialog.update_progress(40, 100, "Copying database file...")
+            QApplication.processEvents()
+            
+            # Copy the database file
+            import shutil
+            shutil.copy2(self.db_manager.db_path, file_path)
+            
+            # Update progress
+            progress_dialog.update_progress(80, 100, "Verifying export...")
+            QApplication.processEvents()
+            
+            # Verify export was successful
+            if not os.path.exists(file_path):
+                raise Exception("Export file not found after export operation")
+            
+            # Get exported file size
+            dest_size = os.path.getsize(file_path)
+            if dest_size != source_size:
+                raise Exception(f"Export file size mismatch: {dest_size} != {source_size}")
+            
+            # Update progress
+            progress_dialog.update_progress(100, 100, "Export completed successfully")
+            QApplication.processEvents()
+            
+            # Close progress dialog properly
+            progress_dialog.close_when_finished()
+            
+            # Show success message
+            self.notification_manager.show_notification(
+                "Database Export Complete",
+                f"Database was successfully exported to:\n{file_path}\nSize: {size_formatted}",
+                NotificationType.SUCCESS
+            )
+            self.status_bar.showMessage(f"Database exported to: {file_path}")
+            
+        except Exception as e:
+            # Close progress dialog properly
+            progress_dialog.close_when_finished()
+            
+            # Show error message
+            logger.error(f"Error exporting database: {e}")
+            error_msg = f"An error occurred while exporting the database:\n{str(e)}"
+            
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                error_msg,
+                QMessageBox.StandardButton.Ok
+            )
+            
+            self.status_bar.showMessage("Error exporting database")
+    
+    def on_import_database(self):
+        """Handle the Import Database action.
+        
+        Imports a database from a file selected by the user.
+        If the target database already contains data, the imported data will be merged.
+        """
+        # Show file dialog to select import file
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Database",
+            os.path.expanduser("~"),
+            "SQLite Database Files (*.db);;All Files (*)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"The selected file does not exist: {file_path}",
+                QMessageBox.StandardButton.Ok
+            )
+            return
+        
+        # Show confirmation dialog with options
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QRadioButton, QLabel, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Import Options")
+        dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Add description label
+        layout.addWidget(QLabel("Select how to handle the imported database:"))
+        
+        # Add option radio buttons
+        merge_option = QRadioButton("Merge with existing database (add new images and folders)")
+        replace_option = QRadioButton("Replace existing database (this will remove all current data)")
+        
+        # Set merge as default
+        merge_option.setChecked(True)
+        
+        layout.addWidget(merge_option)
+        layout.addWidget(replace_option)
+        
+        # Add warning label for replace option
+        warning_label = QLabel("Warning: Replacing the database will remove all current data!")
+        warning_label.setStyleSheet("color: red;")
+        layout.addWidget(warning_label)
+        
+        # Add button box
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | 
+                                    QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        # Show dialog
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return  # User cancelled
+        
+        # Get selected option
+        import_mode = "merge" if merge_option.isChecked() else "replace"
+        
+        # Additional confirmation for replace mode
+        if import_mode == "replace":
+            confirm = QMessageBox.warning(
+                self,
+                "Confirm Replace",
+                "This will REPLACE your entire database with the imported one.\n\n"
+                "All existing data will be lost.\n\n"
+                "Are you sure you want to continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if confirm != QMessageBox.StandardButton.Yes:
+                self.status_bar.showMessage("Database import cancelled")
+                return
+        
+        # Create progress dialog
+        progress_dialog = ProgressDialog(
+            "Importing Database",
+            f"Preparing to import database in {import_mode} mode...",
+            parent=self,
+            cancellable=False
+        )
+        progress_dialog.show()
+        QApplication.processEvents()
+        
+        try:
+            import sqlite3
+            
+            # Verify it's a valid SQLite database
+            progress_dialog.update_progress(10, 100, "Validating import database...")
+            QApplication.processEvents()
+            
+            try:
+                # Attempt to open the database
+                conn = sqlite3.connect(file_path)
+                cursor = conn.cursor()
+                
+                # Check if it has the required tables
+                tables_query = "SELECT name FROM sqlite_master WHERE type='table'"
+                tables = [row[0] for row in cursor.execute(tables_query).fetchall()]
+                
+                required_tables = ['folders', 'images']
+                missing_tables = [table for table in required_tables if table not in tables]
+                
+                if missing_tables:
+                    conn.close()
+                    raise Exception(f"Invalid database format. Missing tables: {', '.join(missing_tables)}")
+                
+                # Get folder and image counts from import file
+                folder_count = cursor.execute("SELECT COUNT(*) FROM folders").fetchone()[0]
+                image_count = cursor.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+                
+                # Close the connection as we'll use the upgrade function
+                conn.close()
+                
+                # Ensure the source database has the required schema
+                # This will add any missing columns and tables
+                progress_dialog.update_progress(15, 100, "Upgrading import database schema if needed...")
+                QApplication.processEvents()
+                
+                from src.database.db_upgrade import upgrade_database_schema
+                success, message = upgrade_database_schema(file_path)
+                if not success:
+                    raise Exception(f"Failed to upgrade import database: {message}")
+                    
+                logger.info(f"Import database schema check: {message}")
+                
+            except sqlite3.Error as e:
+                raise Exception(f"Invalid SQLite database: {str(e)}")
+            
+            # Handle different import modes
+            if import_mode == "replace":
+                # Update progress
+                progress_dialog.update_progress(25, 100, f"Replacing database with {folder_count} folders and {image_count} images...")
+                QApplication.processEvents()
+                
+                # Create a backup of the current database
+                import shutil
+                backup_path = self.db_manager.db_path + ".backup"
+                shutil.copy2(self.db_manager.db_path, backup_path)
+                
+                progress_dialog.update_progress(50, 100, "Preparing database for replacement...")
+                QApplication.processEvents()
+                
+                # First disconnect from the database
+                self.db_manager.disconnect()
+                
+                try:
+                    # Copy the import file over the existing database
+                    shutil.copy2(file_path, self.db_manager.db_path)
+                    
+                    # Update progress
+                    progress_dialog.update_progress(75, 100, "Reconnecting to database...")
+                    QApplication.processEvents()
+                    
+                    # Reconnect to the database
+                    self.db_manager.connect()
+                    
+                    # Update progress
+                    progress_dialog.update_progress(90, 100, "Finalizing database replacement...")
+                    QApplication.processEvents()
+                    
+                    # Remove backup if everything was successful
+                    try:
+                        os.remove(backup_path)
+                    except Exception:
+                        # Not critical if this fails
+                        pass
+                    
+                    # Update progress
+                    progress_dialog.update_progress(100, 100, "Database import completed successfully")
+                    QApplication.processEvents()
+                    
+                    # Close progress dialog properly
+                    progress_dialog.close_when_finished()
+                    
+                    # Clear and update UI
+                    self.folder_panel.refresh_folders()
+                    self.thumbnail_browser.clear_thumbnails()
+                    
+                    # Show success message
+                    self.notification_manager.show_notification(
+                        "Database Import Complete",
+                        f"Successfully replaced database with {folder_count} folders and {image_count} images.",
+                        NotificationType.SUCCESS
+                    )
+                    self.status_bar.showMessage("Database has been successfully replaced")
+                    
+                except Exception as e:
+                    # Restore from backup if copy fails
+                    try:
+                        shutil.copy2(backup_path, self.db_manager.db_path)
+                        self.db_manager.connect()
+                    except Exception:
+                        pass
+                        
+                    raise Exception(f"Failed to replace database: {str(e)}")
+                
+            else:  # merge mode
+                # Update progress
+                progress_dialog.update_progress(20, 100, f"Preparing to merge {folder_count} folders and {image_count} images...")
+                QApplication.processEvents()
+                
+                # Connect to both databases
+                source_conn = sqlite3.connect(file_path)
+                source_conn.row_factory = sqlite3.Row
+                source_cursor = source_conn.cursor()
+                
+                # Get existing folders from target database
+                existing_folders = {folder['path']: folder for folder in self.db_manager.get_folders(enabled_only=False)}
+                
+                # Import folders
+                progress_dialog.update_progress(30, 100, "Importing folders...")
+                QApplication.processEvents()
+                
+                added_folders = 0
+                folder_id_mapping = {}
+                
+                for row in source_cursor.execute("SELECT * FROM folders").fetchall():
+                    folder = dict(row)
+                    
+                    # Skip if folder already exists
+                    if folder['path'] in existing_folders:
+                        # Map the source folder_id to the existing folder_id for image import
+                        folder_id_mapping[folder['folder_id']] = existing_folders[folder['path']]['folder_id']
+                        continue
+                    
+                    # Add folder to target database
+                    try:
+                        new_folder_id = self.db_manager.add_folder(folder['path'])
+                        if new_folder_id:
+                            # Map the source folder_id to the new folder_id for image import
+                            folder_id_mapping[folder['folder_id']] = new_folder_id
+                            added_folders += 1
+                    except Exception as e:
+                        logger.error(f"Error importing folder {folder['path']}: {e}")
+                
+                # Get existing images from target database
+                progress_dialog.update_progress(40, 100, "Preparing to import images...")
+                QApplication.processEvents()
+                
+                # Get all images to check for duplicates (this could be optimized for very large databases)
+                existing_images = set()
+                for folder_id in folder_id_mapping.values():
+                    images = self.db_manager.get_images_for_folder(folder_id, limit=1000000)
+                    for img in images:
+                        existing_images.add(img['full_path'])
+                
+                # Import images
+                progress_dialog.update_progress(50, 100, "Importing images...")
+                QApplication.processEvents()
+                
+                added_images = 0
+                skipped_images = 0
+                total_images = source_cursor.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+                
+                for i, row in enumerate(source_cursor.execute("SELECT * FROM images").fetchall()):
+                    image = dict(row)
+                    
+                    # Update progress periodically
+                    if i % 100 == 0:
+                        progress_percent = 50 + min(40, int((i / total_images) * 40))
+                        progress_dialog.update_progress(progress_percent, 100, f"Imported {added_images} of {total_images} images...")
+                        QApplication.processEvents()
+                    
+                    # Skip if image already exists in target
+                    if image['full_path'] in existing_images:
+                        skipped_images += 1
+                        continue
+                    
+                    # Get the new folder ID if the folder was mapped
+                    if image['folder_id'] not in folder_id_mapping:
+                        # Skip images for folders that weren't imported/mapped
+                        skipped_images += 1
+                        continue
+                    
+                    new_folder_id = folder_id_mapping[image['folder_id']]
+                    
+                    # Add image to target database
+                    try:
+                        # Check if file exists
+                        if not os.path.exists(image['full_path']):
+                            logger.warning(f"Image file not found, skipping: {image['full_path']}")
+                            skipped_images += 1
+                            continue
+                        
+                        # Add image to database
+                        self.db_manager.add_image(
+                            folder_id=new_folder_id,
+                            filename=image['filename'],
+                            full_path=image['full_path'],
+                            file_size=image['file_size'],
+                            file_hash=image.get('file_hash'),
+                            thumbnail_path=None,  # Thumbnails will be regenerated as needed
+                            ai_description=image.get('ai_description')
+                        )
+                        
+                        # Update user description if present
+                        if image.get('user_description'):
+                            # Get the new image ID - this is inefficient but works
+                            new_images = self.db_manager.get_images_for_folder(new_folder_id, limit=1)
+                            for new_img in new_images:
+                                if new_img['full_path'] == image['full_path']:
+                                    self.db_manager.update_image_description(
+                                        new_img['image_id'],
+                                        user_description=image.get('user_description')
+                                    )
+                                    break
+                        
+                        added_images += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Error importing image {image['full_path']}: {e}")
+                        skipped_images += 1
+                
+                # Close source connection
+                source_conn.close()
+                
+                # Update progress
+                progress_dialog.update_progress(95, 100, "Finalizing database import...")
+                QApplication.processEvents()
+                
+                # Optimize database after import
+                self.db_manager.optimize_database()
+                
+                # Upgrade database schema if needed
+                from src.database.db_upgrade import upgrade_database_schema
+                success, message = upgrade_database_schema(self.db_manager.db_path)
+                if success:
+                    logger.info(f"Target database schema check: {message}")
+                else:
+                    logger.warning(f"Failed to upgrade target database: {message}")
+                
+                # Update progress
+                progress_dialog.update_progress(100, 100, "Import completed successfully")
+                QApplication.processEvents()
+                
+                # Close progress dialog properly
+                progress_dialog.close_when_finished()
+                
+                # Refresh UI with updated counts
+                self.update_ui_counts()
+                self.refresh_current_view()
+                
+                # Show success message
+                self.notification_manager.show_notification(
+                    "Database Import Complete",
+                    f"Successfully merged database with {added_folders} new folders and {added_images} new images.\n"
+                    f"Skipped: {skipped_images} duplicate/invalid images.",
+                    NotificationType.SUCCESS
+                )
+                self.status_bar.showMessage("Database has been successfully merged")
+        
+        except Exception as e:
+            # Close progress dialog
+            progress_dialog.close()
+            
+            # Show error message
+            logger.error(f"Error importing database: {e}")
+            error_msg = f"An error occurred while importing the database:\n{str(e)}"
+            
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                error_msg,
+                QMessageBox.StandardButton.Ok
+            )
+            
+            self.status_bar.showMessage("Error importing database")
+    
+    def _format_file_size(self, size_bytes):
+        """Format a file size in bytes to a human-readable format.
+        
+        Args:
+            size_bytes (int): Size in bytes
+            
+        Returns:
+            str: Formatted file size (e.g., '1.2 MB')
+        """
+        if size_bytes < 1024:
+            return f"{size_bytes} bytes"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+    
     def refresh_current_view(self):
         """Refresh the current view."""
         if hasattr(self, 'current_folder_id') and self.current_folder_id:
             # Refresh folder view
             self.on_folder_selected(self.current_folder_id, None)
         else:
-            # Refresh all images view
-            self.show_all_images()
+            # Refresh all images view - use search if there's an existing query
+            if hasattr(self.thumbnail_browser, 'current_search_query') and self.thumbnail_browser.current_search_query:
+                self.thumbnail_browser.search(self.thumbnail_browser.current_search_query)
+            else:
+                self.search_all_images()
+                
+    def update_ui_counts(self):
+        """Update all count labels in the UI: folders, catalogs, and All Images view."""
+        try:
+            # Only proceed if we have necessary components initialized
+            if not hasattr(self, 'db_manager') or not self.db_manager:
+                return
+                
+            # Initialize database extensions if needed
+            if not hasattr(self.db_manager, 'get_all_images_count'):
+                from src.database.db_operations_extension import extend_db_operations
+                extend_db_operations(self.db_manager)
+                
+            # Update All Images count in header if available and we're in All Images view
+            if hasattr(self.thumbnail_browser, 'header_label'):
+                # Get total count
+                total_count = self.db_manager.get_all_images_count()
+                
+                # Check if we're in the All Images view
+                if (not hasattr(self, 'current_folder_id') or not self.current_folder_id) and \
+                   (not hasattr(self.thumbnail_browser, 'current_search_query') or not self.thumbnail_browser.current_search_query):
+                    self.thumbnail_browser.header_label.setText(f"All Images ({total_count} total)")
+                    
+            # Update folder panel if available
+            if hasattr(self, 'folder_panel') and self.folder_panel:
+                self.folder_panel.refresh_folders()
+                
+            # Update catalog panel if available
+            if hasattr(self, 'catalog_panel') and self.catalog_panel:
+                self.catalog_panel.refresh_catalogs()
+                
+        except Exception as e:
+            logger.error(f"Error updating UI counts: {e}")
+            
+    def _update_counts_after_background_scan(self, *args, **kwargs):
+        """Update UI counts after a background scan operation completes.
+        
+        This is designed to be connected to signal handlers from background operations.
+        The arguments are not used but allow this to be connected to various signals.
+        """
+        try:
+            logger.debug("Updating UI counts after background operation")
+            # Update UI counts
+            self.update_ui_counts()
+            
+            # Refresh current view if we're showing all images
+            if not hasattr(self, 'current_folder_id') or not self.current_folder_id:
+                # Use QTimer to ensure this happens after the current event loop cycle
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, self.refresh_current_view)
+        except Exception as e:
+            logger.error(f"Error in _update_counts_after_background_scan: {e}")
+                
+    def on_database_maintenance(self):
+        """Handler for the comprehensive Database Maintenance menu action."""
+        try:
+            # Import required components
+            from src.ui.database_maintenance_dialog import DatabaseMaintenanceDialog
+            
+            # Show the dialog
+            dialog = DatabaseMaintenanceDialog(
+                self, 
+                self.db_manager, 
+                self.db_manager.enhanced_search
+            )
+            dialog.exec()
+            
+            # Refresh view after maintenance
+            self.refresh_current_view()
+            
+        except Exception as e:
+            logger.error(f"Error showing database maintenance dialog: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred while showing the database maintenance dialog:\n{str(e)}",
+                QMessageBox.StandardButton.Ok
+            )
+    
+    def on_rebuild_database(self):
+        """Handler for the dedicated Rebuild Corrupted Database menu action.
+        
+        This directly rebuilds a database from scratch to fix corruption issues.
+        """
+        try:
+            # Confirm user wants to proceed with rebuild
+            response = QMessageBox.warning(
+                self,
+                "Rebuild Database",
+                "This will completely rebuild the database from scratch to fix corruption.\n\n"
+                "A backup of your current database will be created before rebuilding.\n\n"
+                "This operation may take several minutes. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if response != QMessageBox.StandardButton.Yes:
+                return
+            
+            # Show progress dialog
+            progress_dialog = QProgressDialog("Rebuilding database...", "", 0, 100, self)
+            progress_dialog.setWindowTitle("Database Rebuild")
+            progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            progress_dialog.setCancelButton(None)  # No cancel button
+            progress_dialog.setMinimumDuration(0)  # Show immediately
+            progress_dialog.setValue(0)
+            QApplication.processEvents()
+            
+            # Disconnect from database
+            progress_dialog.setLabelText("Closing database connections...")
+            progress_dialog.setValue(10)
+            QApplication.processEvents()
+            self.db_manager.disconnect()
+            
+            # Import database repair function
+            progress_dialog.setLabelText("Preparing for database rebuild...")
+            progress_dialog.setValue(20)
+            QApplication.processEvents()
+            from src.database.db_repair import rebuild_database
+            
+            # Perform rebuild
+            progress_dialog.setLabelText("Rebuilding database... This may take several minutes.")
+            progress_dialog.setValue(30)
+            QApplication.processEvents()
+            db_path = self.db_manager.db_path
+            success = rebuild_database(db_path)
+            
+            # Reconnect to database
+            progress_dialog.setLabelText("Reconnecting to database...")
+            progress_dialog.setValue(80)
+            QApplication.processEvents()
+            self.db_manager.connect()
+            
+            # Reset connections in enhanced search
+            progress_dialog.setLabelText("Resetting connections...")
+            progress_dialog.setValue(90)
+            QApplication.processEvents()
+            if hasattr(self.db_manager, 'enhanced_search') and self.db_manager.enhanced_search:
+                if hasattr(self.db_manager.enhanced_search, 'reset_connection'):
+                    self.db_manager.enhanced_search.reset_connection()
+            
+            # Complete
+            progress_dialog.setLabelText("Database rebuild complete.")
+            progress_dialog.setValue(100)
+            QApplication.processEvents()
+            
+            # Close dialog
+            progress_dialog.close()
+            
+            # Show result message
+            if success:
+                QMessageBox.information(
+                    self,
+                    "Database Rebuild Complete",
+                    "The database has been successfully rebuilt.\n\n"
+                    "A backup of your previous database was created at:\n"
+                    f"{db_path}.backup",
+                    QMessageBox.StandardButton.Ok
+                )
+                
+                # Refresh view
+                self.refresh_current_view()
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Database Rebuild Failed",
+                    "The database could not be rebuilt.\n\n"
+                    "Please check the log file for more information.",
+                    QMessageBox.StandardButton.Ok
+                )
+            
+        except Exception as e:
+            logger.error(f"Error rebuilding database: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred during database rebuild:\n{str(e)}",
+                QMessageBox.StandardButton.Ok
+            )
+    
+    def view_all_images(self):
+        """Display all images in the database with pagination"""
+        try:
+            # Update the thumbnail browser UI to show we're loading
+            # This ensures UI responsiveness during loading
+            self.status_bar.showMessage("Loading all images...")
+            QApplication.processEvents()  # Process events to update the UI
+            
+            # Initialize database extensions if needed
+            if not hasattr(self.db_manager, 'get_all_images_count'):
+                logger.info("Initializing database extensions for view_all_images")
+                from src.database.db_operations_extension import extend_db_operations
+                extend_db_operations(self.db_manager)
+            
+            # Get total count of images for pagination
+            total_count = self.db_manager.get_all_images_count()
+            
+            # Clear any previous search or folder selection
+            if hasattr(self.thumbnail_browser, 'current_folder_id'):
+                self.thumbnail_browser.current_folder_id = None
+            if hasattr(self.thumbnail_browser, 'current_catalog_id'):
+                self.thumbnail_browser.current_catalog_id = None
+            if hasattr(self.thumbnail_browser, 'current_search_query'):
+                self.thumbnail_browser.current_search_query = None
+            if hasattr(self.thumbnail_browser, 'last_search_params'):
+                self.thumbnail_browser.last_search_params = None
+            
+            # Set flag to indicate this is the "All Images" view
+            self.thumbnail_browser.all_images_view = True
+            
+            # Reset pagination to first page
+            self.thumbnail_browser.current_page = 0
+            
+            # Get the page size from pagination if available
+            page_size = 200  # Default
+            if hasattr(self.thumbnail_browser, 'page_size'):
+                page_size = self.thumbnail_browser.page_size
+            
+            # Enable pagination
+            self.thumbnail_browser.is_paginated = True
+            self.thumbnail_browser.total_items = total_count
+            self.thumbnail_browser.total_pages = (total_count + page_size - 1) // page_size
+            
+            # Get first page of images
+            images = self.db_manager.get_all_images(limit=page_size, offset=0)
+            
+            # Clear thumbnails and add the first page
+            self.thumbnail_browser.clear_thumbnails()
+            self.thumbnail_browser.add_thumbnails(images)
+            
+            # Update header with count
+            if hasattr(self.thumbnail_browser, 'header_label'):
+                self.thumbnail_browser.header_label.setText(f"All Images ({total_count} total)")
+            
+            # Update status
+            page_count = (total_count + page_size - 1) // page_size
+            if page_count > 1:
+                self.status_bar.showMessage(
+                    f"Showing page 1 of {page_count} ({len(images)} of {total_count} images)"
+                )
+            else:
+                self.status_bar.showMessage(f"Showing all {len(images)} images")
+                
+            # Update pagination controls if available
+            if hasattr(self.thumbnail_browser, 'thumbnail_pagination') and \
+               hasattr(self.thumbnail_browser.thumbnail_pagination, 'update_pagination_controls'):
+                self.thumbnail_browser.thumbnail_pagination.update_pagination_controls()
+                
+            # Update window title
+            if hasattr(self, 'setWindowTitle'):
+                self.setWindowTitle("Star Image Browse - All Images")
+                
+        except Exception as e:
+            logger.error(f"Error viewing all images: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred while loading all images:\n{str(e)}",
+                QMessageBox.StandardButton.Ok
+            )
+            
+    def on_update_image_dimensions(self):
+        """Handler for Update Image Dimensions menu action."""
+        try:
+            # Import required components
+            from src.ui.database_dimensions_update_dialog import DatabaseDimensionsUpdateDialog
+            
+            # Show the dialog
+            dialog = DatabaseDimensionsUpdateDialog(
+                self, 
+                self.db_manager, 
+                self.db_manager.enhanced_search
+            )
+            dialog.exec()
+            
+            # Refresh view after update
+            self.refresh_current_view()
+            
+        except Exception as e:
+            logger.error(f"Error showing dimensions update dialog: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred while showing the dimensions update dialog:\n{str(e)}",
+                QMessageBox.StandardButton.Ok
+            )
     
     def process_batch_with_parallel_pipeline(self, images, operation_type):
         """Process a batch of images using the parallel processing pipeline.

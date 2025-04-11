@@ -10,7 +10,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QLineEdit, QPushButton, QCompleter, QDateEdit,
-    QGroupBox, QCheckBox
+    QGroupBox, QCheckBox, QRadioButton, QButtonGroup
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QStringListModel, QDate
 
@@ -19,7 +19,7 @@ logger = logging.getLogger("StarImageBrowse.ui.search_panel")
 class SearchPanel(QWidget):
     """Panel for searching images by description and date range."""
     
-    search_requested = pyqtSignal(str)  # Signal emitted when search is requested
+    search_requested = pyqtSignal(str, bool)  # Signal emitted when search is requested (query, search_all_folders)
     date_search_requested = pyqtSignal(datetime, datetime)  # Signal emitted when date search is requested
     
     def __init__(self, parent=None):
@@ -58,6 +58,26 @@ class SearchPanel(QWidget):
         search_layout.addWidget(self.search_button)
         
         layout.addLayout(search_layout)
+        
+        # Search scope options
+        scope_layout = QHBoxLayout()
+        scope_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Create a button group for radio buttons
+        self.scope_group = QButtonGroup(self)
+        
+        # Current folder option (default)
+        self.current_folder_radio = QRadioButton("Current Folder")
+        self.current_folder_radio.setChecked(True)
+        self.scope_group.addButton(self.current_folder_radio)
+        scope_layout.addWidget(self.current_folder_radio)
+        
+        # All images option
+        self.all_images_radio = QRadioButton("All Images")
+        self.scope_group.addButton(self.all_images_radio)
+        scope_layout.addWidget(self.all_images_radio)
+        
+        layout.addLayout(scope_layout)
         
         # Search suggestions (will be populated later)
         self.completer = QCompleter()
@@ -110,6 +130,8 @@ class SearchPanel(QWidget):
             "• \"sunset beach\"\n"
             "• \"dog playing\"\n"
             "• \"red car\"\n\n"
+            "Select 'Current Folder' to search only within the selected folder,\n"
+            "or 'All Images' to search across your entire collection.\n\n"
             "Or search for images by modification date range."
         )
         help_label.setWordWrap(True)
@@ -124,8 +146,11 @@ class SearchPanel(QWidget):
         query = self.search_input.text().strip()
         
         if query:
-            # Emit search signal
-            self.search_requested.emit(query)
+            # Determine if we're searching all folders
+            search_all_folders = self.all_images_radio.isChecked()
+            
+            # Emit search signal with search scope
+            self.search_requested.emit(query, search_all_folders)
             
             # Add to recent searches (could be implemented later)
     

@@ -18,7 +18,7 @@ STARNODES Image Manager is a Windows application that helps you organize, search
 - **Multiple Themes**: Choose from 12 different visual styles
 
 ## Known Bugs in 0.9.7
--when importing a database from a backup merge isn´t working at the moment. please use option: remove
+-when importing a database from a backup merge isn´t working at the moment. please use option: replace.
 
 ## Getting Started
 

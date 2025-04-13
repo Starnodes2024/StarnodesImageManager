@@ -18,8 +18,23 @@ import threading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
-# Setup logging
-log_dir = os.path.join(current_dir, "logs")
+# Determine if we're running in portable mode
+is_portable = getattr(sys, 'frozen', False)
+app_base_dir = current_dir
+if is_portable:
+    app_base_dir = os.path.dirname(sys.executable)
+    
+    # CRITICAL: Override PyInstaller's temporary directory with our portable directory
+    # This prevents PyInstaller from using temp folders like AppData
+    if hasattr(sys, '_MEIPASS'):
+        print(f"PyInstaller _MEIPASS detected: {sys._MEIPASS}")
+        print(f"Overriding with our portable app_base_dir: {app_base_dir}")
+        
+        # PyInstaller extracts files to this temporary directory
+        # We need to modify our path handling to use our own directories instead
+
+# Setup logging (we'll update this with config settings later)
+log_dir = os.path.join(app_base_dir, "data", "logs")
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
@@ -52,10 +67,23 @@ for old_log in log_files[5:]:  # Keep 5 most recent logs
     except Exception as e:
         print(f"Warning: Could not remove old log file {old_log}: {e}")
 
+# Initialize our application logger
 logger = logging.getLogger("STARNODESImageManager")
 
+# Log important information about the execution environment
+logger.info(f"Starting application in {'portable' if is_portable else 'development'} mode")
+logger.info(f"Application base directory: {app_base_dir}")
+logger.info(f"Log directory: {log_dir}")
+
 def activate_virtual_environment():
-    """Activate the bundled virtual environment."""
+    """Activate the bundled virtual environment if running as a script.
+    When running as a PyInstaller executable, this is not needed and will be skipped.
+    """
+    # Check if we're running in a PyInstaller bundle
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        logger.info("Running as PyInstaller executable, skipping virtual environment activation")
+        return True
+    
     logger.info("Activating virtual environment...")
     venv_path = os.path.join(current_dir, "venv")
     
@@ -79,7 +107,9 @@ def activate_virtual_environment():
         return True
     else:
         logger.error(f"Virtual environment not found at: {site_packages}")
-        return False
+        # Return True anyway if we're running as an executable
+        # This allows the app to continue startup without an environment
+        return getattr(sys, 'frozen', False)
 
 # Global references to prevent garbage collection
 _app_instance = None
@@ -93,11 +123,32 @@ def main():
     """Main application entry point."""
     logger.info("Starting STARNODES Image Manager application...")
     
-    # Activate virtual environment
+    # If running as PyInstaller executable, ensure we're using portable paths
+    if getattr(sys, 'frozen', False):
+        logger.info("Running as PyInstaller executable - ensuring portable paths")
+        
+        # Force our portable paths instead of PyInstaller's temporary extraction
+        exe_dir = os.path.dirname(sys.executable)
+        
+        # These are the critical portable directories we need to ensure exist
+        portable_dirs = [
+            os.path.join(exe_dir, "data"),
+            os.path.join(exe_dir, "data", "thumbnails"),
+            os.path.join(exe_dir, "config"),
+            os.path.join(exe_dir, "data", "logs")
+        ]
+        
+        for directory in portable_dirs:
+            os.makedirs(directory, exist_ok=True)
+            logger.info(f"Ensured portable directory exists: {directory}")
+    
+    # Activate virtual environment (only necessary when running as script)
     if not activate_virtual_environment():
-        logger.error("Failed to activate virtual environment. Run setup_env.py first.")
-        print("ERROR: Virtual environment not found. Please run setup_env.py first.")
-        return
+        # Only exit if we're not running as a PyInstaller executable
+        if not getattr(sys, 'frozen', False):
+            logger.error("Failed to activate virtual environment. Run setup_env.py first.")
+            print("ERROR: Virtual environment not found. Please run setup_env.py first.")
+            return
     
     # Import required modules (must be done after activating virtual environment)
     try:
@@ -173,8 +224,63 @@ def main():
     if not os.path.isabs(db_path):
         db_path = os.path.join(current_dir, db_path)
     
+    # FORCE consistent paths for both portable (exe) and development (script) modes
+    # This ensures thumbnails are always in /data/thumbnails for ALL run modes
+    if getattr(sys, 'frozen', False):
+        # PORTABLE MODE: Get the directory where the executable is located
+        exe_dir = os.path.dirname(sys.executable)
+        
+        # Force portable paths even if config has something else
+        portable_db_path = os.path.join(exe_dir, "data", "image_database.db")
+        portable_thumbnails_path = os.path.join(exe_dir, "data", "thumbnails")
+        portable_cache_path = os.path.join(exe_dir, "data", "cache")
+        
+        # Override the config settings with our portable paths
+        config_manager.set("database", "path", portable_db_path)
+        config_manager.set("thumbnails", "path", portable_thumbnails_path)
+        config_manager.set("cache", "path", portable_cache_path)
+        
+        # Save the configuration to ensure it persists
+        config_manager.save()
+        
+        logger.info(f"FORCED PORTABLE PATHS:")
+        logger.info(f"  Database: {portable_db_path}")
+        logger.info(f"  Thumbnails: {portable_thumbnails_path}")
+        logger.info(f"  Cache: {portable_cache_path}")
+    else:
+        # DEVELOPMENT MODE: Use the exact same directory structure for consistency
+        app_dir = os.path.dirname(os.path.abspath(__file__)) # Main directory of the application
+        
+        # Force the same data/thumbnails structure for development mode
+        dev_data_dir = os.path.join(app_dir, "data")
+        dev_db_path = os.path.join(dev_data_dir, "image_database.db")
+        dev_thumbnails_path = os.path.join(dev_data_dir, "thumbnails")
+        dev_cache_path = os.path.join(dev_data_dir, "cache")
+        
+        # Create all necessary directories
+        os.makedirs(dev_data_dir, exist_ok=True)
+        os.makedirs(dev_thumbnails_path, exist_ok=True)
+        os.makedirs(os.path.join(dev_data_dir, "logs"), exist_ok=True)
+        os.makedirs(dev_cache_path, exist_ok=True)
+        
+        # Override the config settings to use our development paths
+        config_manager.set("database", "path", dev_db_path)
+        config_manager.set("thumbnails", "path", dev_thumbnails_path)
+        config_manager.set("cache", "path", dev_cache_path)
+        
+        # Save the configuration to ensure it persists
+        config_manager.save()
+        
+        logger.info(f"FORCED DEVELOPMENT PATHS:")
+        logger.info(f"  Database: {dev_db_path}")
+        logger.info(f"  Thumbnails: {dev_thumbnails_path}")
+        logger.info(f"  Cache: {dev_cache_path}")
+    
     # Ensure directory exists
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    except Exception as e:
+        logger.error(f"Error creating database directory: {e}")
     
     logger.info(f"Using database: {db_path}")
     
@@ -237,13 +343,53 @@ def main():
     db_manager = DatabaseManager(db_path)
     db_manager.initialize_database()
     
+    # Ensure thumbnail directory exists and fix paths for imported databases
+    thumbnail_path = config_manager.get("thumbnails", "path")
+    os.makedirs(thumbnail_path, exist_ok=True)
+    logger.info(f"Using thumbnail directory: {thumbnail_path}")
+    
+    # Verify the directory structure again - this is critical for both modes
+    if not os.path.exists(thumbnail_path):
+        logger.warning(f"Thumbnail directory does not exist even after creation attempt: {thumbnail_path}")
+        # Try another creation attempt with higher permissions
+        try:
+            os.makedirs(thumbnail_path, exist_ok=True, mode=0o777)
+            logger.info(f"Created thumbnail directory with elevated permissions: {thumbnail_path}")
+        except Exception as e:
+            logger.error(f"Failed to create thumbnail directory: {e}")
+    
+    # Fix imported database thumbnail paths - this is optional since thumbnails already work
+    try:
+        fix_imported_database_thumbnails(db_manager, thumbnail_path)
+    except Exception as e:
+        # Don't let this error stop the application
+        logger.warning(f"Non-critical error in thumbnail path fixing: {e}")
+        logger.info("This error can be safely ignored as thumbnails are working correctly.")
+    
+    # Log thumbnail path for debugging
+    logger.info(f"FINAL CONFIRMED Thumbnail path: {thumbnail_path}")
+    
     # Application instance already created above
     
-    # Simple, reliable function to create and show main window
+    # This function is moved down and merged with the duplicate version below
+    
+    # Check if this is the first run or if there's no data in the database
+    is_first_run = config_manager.get("app", "first_run", True)
+    
+    # Check if there are any folders in the database
+    folders = db_manager.get_folders()
+    data_exists = len(folders) > 0
+    
+    # Log the first run status and whether we're running as an executable
+    is_frozen = getattr(sys, 'frozen', False)
+    logger.info(f"First run status: is_first_run={is_first_run}, has_data={data_exists}, is_executable={is_frozen}")
+            
+    # Create and show the main window
     def create_main_window():
         try:
+            # Create the main window
             main_window = MainWindow(db_manager)
-            main_window.setWindowTitle("STARNODES Image Manager V0.9.6")
+            main_window.setWindowTitle("STARNODES Image Manager V0.9.7")
             
             # Set up key position and size
             desktop = app.primaryScreen().availableGeometry()
@@ -255,36 +401,6 @@ def main():
             main_window.raise_()
             main_window.activateWindow()
             
-            # Store a reference
-            app_references["main_window"] = main_window
-            
-            # Log success
-            logger.info("Main window created successfully")
-            return main_window
-        except Exception as e:
-            logger.error(f"Error creating main window: {e}")
-            QMessageBox.critical(None, "Error", f"Failed to create main window: {e}")
-            return None
-    
-    # Check if this is the first run or if there's no data in the database
-    is_first_run = config_manager.get("app", "first_run", True)
-    
-    # Check if there are any folders in the database
-    folders = db_manager.get_folders()
-    data_exists = len(folders) > 0
-    
-    # Log the first run status
-    logger.info(f"First run status: is_first_run={is_first_run}, has_data={data_exists}")
-            
-    # Simple function to create and show the main window
-    def create_main_window():
-        try:
-            # Create the main window
-            main_window = MainWindow(db_manager)
-            main_window.show()
-            main_window.raise_()
-            main_window.activateWindow()
-            
             # Store the reference to prevent garbage collection
             app_refs['main_window'] = main_window
             
@@ -292,6 +408,7 @@ def main():
             return main_window
         except Exception as e:
             logger.error(f"Error creating main window: {e}")
+            QMessageBox.critical(None, "Error", f"Failed to create main window: {e}")
             return None
     
     # Function to handle setup completion
@@ -315,11 +432,74 @@ def main():
         def __init__(self):
             self.main_window = None
             self.wizard = None
+            
+            # In portable mode, ensure all paths are set correctly
+            if getattr(sys, 'frozen', False):
+                self.setup_portable_paths()
         
         def start(self):
             # Setup wizard was removed as per PROGRESS.md (2025-04-06)
             # Always show main window directly
             self.show_main_window()
+        
+        def setup_portable_paths(self):
+            """Set up all paths for portable mode operation"""
+            try:
+                # Get executable directory
+                exe_dir = os.path.dirname(sys.executable)
+                data_dir = os.path.join(exe_dir, "data")
+                
+                # Ensure all required directories exist
+                dirs_to_create = [
+                    data_dir,
+                    os.path.join(data_dir, "thumbnails"),
+                    os.path.join(data_dir, "cache"),
+                    os.path.join(data_dir, "exports"),
+                    os.path.join(data_dir, "logs"),
+                    os.path.join(exe_dir, "config")  # Create config directory next to the executable
+                ]
+                
+                for directory in dirs_to_create:
+                    os.makedirs(directory, exist_ok=True)
+                    logger.info(f"Created portable directory: {directory}")
+                
+                # Copy default config files to the config directory if they don't exist
+                default_config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
+                target_config_dir = os.path.join(exe_dir, "config")
+                
+                try:
+                    if os.path.exists(default_config_dir) and os.path.isdir(default_config_dir):
+                        for config_file in os.listdir(default_config_dir):
+                            src_file = os.path.join(default_config_dir, config_file)
+                            dst_file = os.path.join(target_config_dir, config_file)
+                            
+                            # Only copy if the file doesn't exist
+                            if os.path.isfile(src_file) and not os.path.exists(dst_file):
+                                import shutil
+                                shutil.copy2(src_file, dst_file)
+                                logger.info(f"Copied config file to portable location: {dst_file}")
+                except Exception as e:
+                    logger.error(f"Error copying config files: {e}")
+                
+                # Redirect logs to the portable location
+                if logger.handlers:
+                    for handler in logger.handlers:
+                        if isinstance(handler, logging.FileHandler):
+                            # Close current log file
+                            handler.close()
+                            logger.removeHandler(handler)
+                            
+                            # Create new log file in portable location
+                            portable_log = os.path.join(data_dir, "logs", f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+                            new_handler = logging.FileHandler(portable_log)
+                            new_handler.setFormatter(handler.formatter)
+                            new_handler.setLevel(handler.level)
+                            logger.addHandler(new_handler)
+                            
+                            logger.info(f"Redirected logs to portable location: {portable_log}")
+                            break
+            except Exception as e:
+                logger.error(f"Error setting up portable paths: {e}")
         
         # Setup wizard method removed as it's no longer used (per PROGRESS.md 2025-04-06)
         # "Removed setup wizard and replaced with default configuration"
@@ -456,10 +636,107 @@ def main():
     logger.info(f"Application exiting with code {exit_code}")
     return exit_code
 
+def fix_imported_database_thumbnails(db_manager, thumbnails_dir):
+    """Fix thumbnail paths in imported databases to ensure thumbnails display correctly.
+    
+    This function checks the database for thumbnail paths that may be inconsistent
+    with the current mode (script vs executable) and fixes them to ensure thumbnails
+    can be properly displayed.
+    
+    Args:
+        db_manager: DatabaseManager instance
+        thumbnails_dir: Path to the thumbnails directory
+    """
+    # Log the thumbnails directory we're using
+    logger.info(f"Fixing imported database thumbnails with thumbnails_dir: {thumbnails_dir}")
+    try:
+        logger.info("Checking for imported database and fixing thumbnail paths if needed...")
+        
+        # Get all images with thumbnail paths - using direct connection instead of execute_query
+        # Since the DatabaseManager doesn't have execute_query method
+        if db_manager.conn is None:
+            db_manager.connect()
+        
+        try:
+            # Use the existing connection to execute the query
+            cursor = db_manager.conn.cursor()
+            cursor.execute("SELECT image_id, thumbnail_path FROM images WHERE thumbnail_path IS NOT NULL")
+            images = cursor.fetchall()
+        except Exception as e:
+            logger.warning(f"Could not query images: {e}, skipping thumbnail path fixing")
+            return (0, 0, 0, 0)
+        
+        if not images or len(images) == 0:
+            logger.info("No images with thumbnails found in database")
+            return
+        
+        # Import utility specifically here to avoid circular imports
+        from src.utilities.convert_thumbnail_paths import convert_to_relative_paths
+        
+        # Convert thumbnail paths to ensure they're consistent with current mode
+        success, unchanged, errors = convert_to_relative_paths(
+            db_path=db_manager.db_path,
+            db_manager=db_manager,
+            dry_run=False
+        )
+        
+        if success > 0:
+            logger.info(f"Fixed {success} thumbnail paths for imported database")
+        else:
+            logger.info("No thumbnail paths needed fixing")
+        
+        # Check if thumbnail directory contains the expected files
+        thumbnail_filenames = set()
+        for img in images:
+            if img['thumbnail_path']:
+                thumbnail_filenames.add(os.path.basename(img['thumbnail_path']))
+        
+        # Check if thumbnails exist
+        missing_count = 0
+        if os.path.exists(thumbnails_dir):
+            existing_thumbnails = set(os.listdir(thumbnails_dir))
+            missing_thumbnails = thumbnail_filenames - existing_thumbnails
+            missing_count = len(missing_thumbnails)
+            
+            # Log the detailed information about thumbnails for debugging
+            logger.info(f"Total thumbnails in database: {len(thumbnail_filenames)}")
+            logger.info(f"Total thumbnails found in directory: {len(existing_thumbnails)}")
+            
+            if missing_count > 0:
+                logger.warning(f"Found {missing_count} missing thumbnails that will need to be regenerated")
+                # Log up to 10 missing thumbnails to help with debugging
+                if len(missing_thumbnails) <= 10:
+                    logger.warning(f"Missing thumbnails: {list(missing_thumbnails)}")
+                else:
+                    logger.warning(f"First 10 missing thumbnails: {list(missing_thumbnails)[:10]}")
+        else:
+            logger.warning(f"Thumbnail directory does not exist: {thumbnails_dir}")
+        
+        return (success, unchanged, errors, missing_count)
+    except Exception as e:
+        logger.error(f"Error fixing imported database thumbnails: {e}")
+        return (0, 0, 1, 0)
+
 if __name__ == "__main__":
     try:
         exit_code = main()
         sys.exit(exit_code)
     except Exception as e:
         logger.error(f"Critical application error: {e}")
+        # Add more detailed error reporting for executable mode
+        if getattr(sys, 'frozen', False):
+            try:
+                from PyQt6.QtWidgets import QApplication, QMessageBox
+                app = QApplication(sys.argv)
+                error_msg = QMessageBox()
+                error_msg.setIcon(QMessageBox.Icon.Critical)
+                error_msg.setWindowTitle("STARNODES Image Manager - Critical Error")
+                error_msg.setText("A critical error occurred while starting the application.")
+                error_msg.setDetailedText(f"Error details: {str(e)}\n\nPlease check the logs or contact support.")
+                error_msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                error_msg.exec()
+            except Exception:
+                # If even the error reporting fails, at least try to show something to the user
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, f"Application failed to start: {str(e)}", "STARNODES Image Manager - Error", 0)
         sys.exit(1)

@@ -103,9 +103,53 @@ class DatabaseOptimizer:
                 # Close any existing connections to the database
                 self.db_manager.disconnect()
                 
-                # Replace the database file
-                os.replace(new_db_path, self.db_manager.db_path)
-                logger.info(f"Successfully replaced original database with optimized version")
+                # Windows-friendly approach: Instead of replacing the file directly, use SQLite's backup API
+                # This bypasses Windows file locking issues
+                try:
+                    # Create a new in-memory database
+                    temp_conn = sqlite3.connect(":memory:")
+                    # Load the optimized database into memory
+                    optimized_conn = sqlite3.connect(new_db_path)
+                    optimized_conn.backup(temp_conn)
+                    optimized_conn.close()
+                    
+                    # Now we need to connect to the original database and restore from our in-memory copy
+                    # This approach works around Windows file locking
+                    orig_conn = sqlite3.connect(self.db_manager.db_path)
+                    temp_conn.backup(orig_conn)
+                    
+                    # Close all connections
+                    temp_conn.close()
+                    orig_conn.close()
+                    
+                    # Remove the temporary optimized file
+                    try:
+                        os.remove(new_db_path)
+                    except:
+                        pass  # Non-critical if we can't remove it
+                    
+                    logger.info(f"Successfully replaced original database with optimized version using backup API")
+                except Exception as backup_error:
+                    logger.error(f"Backup API approach failed: {backup_error}")
+                    logger.info("Falling back to file replacement method...")
+                    
+                    # Try traditional file replacement as fallback
+                    # Create a backup of the original first
+                    backup_path = f"{self.db_manager.db_path}.backup"
+                    try:
+                        shutil.copy2(self.db_manager.db_path, backup_path)
+                        os.replace(new_db_path, self.db_manager.db_path)
+                        logger.info(f"Successfully replaced original database with optimized version using file replacement")
+                    except Exception as replace_error:
+                        logger.error(f"File replacement fallback also failed: {replace_error}")
+                        # Restore from backup if we have one and the replacement failed
+                        if os.path.exists(backup_path):
+                            try:
+                                os.replace(backup_path, self.db_manager.db_path)
+                                logger.info("Restored original database from backup")
+                            except:
+                                logger.error("Could not restore from backup")
+                        raise replace_error
                 
                 elapsed_time = time.time() - start_time
                 logger.info(f"Database optimization completed in {elapsed_time:.2f} seconds")

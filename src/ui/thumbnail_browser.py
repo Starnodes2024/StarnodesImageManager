@@ -55,12 +55,22 @@ class ThumbnailBrowser(QWidget):
         
         # Get the config manager from the main window if available
         config_manager = None
+        thumbnails_dir = None
         if parent and hasattr(parent, 'config_manager'):
             config_manager = parent.config_manager
+        
+        # Get the thumbnails directory
+        if parent and hasattr(parent, 'thumbnail_generator'):
+            thumbnails_dir = parent.thumbnail_generator.thumbnail_dir
+        else:
+            # Use default thumbnails directory
+            app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            thumbnails_dir = os.path.join(app_dir, "thumbnails")
             
         self.thumbnail_loader = LazyThumbnailLoader(
             max_concurrent=max_concurrent,
-            config_manager=config_manager
+            config_manager=config_manager,
+            thumbnails_dir=thumbnails_dir
         )
         
         self.setup_ui()

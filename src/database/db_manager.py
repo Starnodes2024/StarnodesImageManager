@@ -462,3 +462,76 @@ class DatabaseManager:
             list: List of catalog dictionaries for the image
         """
         return self.db_ops.get_catalogs_for_image(image_id)
+        
+    def execute_query(self, query, params=None):
+        """Execute a raw SQL query.
+        
+        This method provides direct access to execute SQL queries against the database.
+        It should be used sparingly and only when the other methods don't provide the needed functionality.
+        
+        Args:
+            query (str): SQL query to execute
+            params (tuple or dict, optional): Parameters for the query
+            
+        Returns:
+            list: List of rows as dictionaries
+        """
+        logger.debug(f"Executing query: {query}")
+        
+        try:
+            # Get a new connection from the database operations object
+            conn = self.db_ops.db.get_connection()
+            if not conn:
+                logger.error("Could not get database connection")
+                return []
+                
+            # Execute the query
+            cursor = conn.execute(query, params or ())
+            if not cursor:
+                logger.error("Query execution failed")
+                return []
+                
+            # Get the results and convert to dictionaries
+            result = [dict(row) for row in cursor.fetchall()]
+            conn.disconnect()
+            return result
+        except Exception as e:
+            logger.error(f"Error executing query: {e}")
+            return []
+    
+    def empty_database(self):
+        """Empty the database of all images, folders, and catalogs.
+        
+        This removes all data from the database but keeps the structure intact.
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.conn:
+                self.connect()
+                
+            # Use direct SQL for maximum performance
+            # Delete from all tables in proper order to maintain referential integrity
+            tables = [
+                "catalog_images",   # Foreign key references
+                "images",           # Main image data
+                "catalogs",         # Catalog data
+                "folders"           # Folder data
+            ]
+            
+            for table in tables:
+                self.cursor.execute(f"DELETE FROM {table}")
+                
+            # Commit the changes
+            self.conn.commit()
+            
+            # Reset AUTOINCREMENT counters
+            self.cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('images', 'folders', 'catalogs')")
+            self.conn.commit()
+            
+            logger.info("Database emptied successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error emptying database: {e}")
+            return False

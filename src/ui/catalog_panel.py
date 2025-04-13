@@ -54,7 +54,19 @@ class CatalogPanel(QWidget):
         # Add New Catalog button
         self.add_catalog_button = QPushButton("+")
         self.add_catalog_button.setToolTip("Add New Catalog")
-        self.add_catalog_button.setFixedSize(24, 24)  # Make it a small button
+        self.add_catalog_button.setFixedSize(30, 30)  # Increased size for better visibility
+        self.add_catalog_button.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 16px;
+                background-color: #494949;
+                border-radius: 15px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #5a5a5a;
+            }
+        """)
         self.add_catalog_button.clicked.connect(self.on_add_catalog_clicked)
         header_layout.addWidget(self.add_catalog_button)
         

@@ -107,7 +107,19 @@ class FolderPanel(QWidget):
         # Add New Folder button
         self.add_folder_button = QPushButton("+")
         self.add_folder_button.setToolTip("Add New Folder")
-        self.add_folder_button.setFixedSize(24, 24)  # Make it a small button
+        self.add_folder_button.setFixedSize(30, 30)  # Increased size for better visibility
+        self.add_folder_button.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 16px;
+                background-color: #494949;
+                border-radius: 15px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #5a5a5a;
+            }
+        """)
         self.add_folder_button.clicked.connect(self.on_add_folder_clicked)
         header_layout.addWidget(self.add_folder_button)
         

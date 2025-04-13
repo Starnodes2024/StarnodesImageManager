@@ -6,6 +6,7 @@ Provides optimized thumbnail loading for better performance with large image col
 """
 
 import os
+import sys
 import logging
 from PyQt6.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot, QThreadPool, QTimer
 from PyQt6.QtCore import Qt
@@ -25,31 +26,79 @@ class ThumbnailLoadSignals(QObject):
 class ThumbnailLoadTask(QRunnable):
     """Task for loading a thumbnail in a background thread."""
     
-    def __init__(self, image_id, thumbnail_path, max_size=(200, 200)):
+    def __init__(self, image_id, thumbnail_path, max_size=(200, 200), thumbnails_dir=None):
         """Initialize the thumbnail load task.
         
         Args:
             image_id (int): ID of the image
-            thumbnail_path (str): Path to the thumbnail image
+            thumbnail_path (str): Path to the thumbnail image (can be relative or absolute)
             max_size (tuple): Maximum size (width, height) for the thumbnail
+            thumbnails_dir (str, optional): Directory where thumbnails are stored
         """
         super().__init__()
         self.image_id = image_id
         self.thumbnail_path = thumbnail_path
         self.max_size = max_size
+        self.thumbnails_dir = thumbnails_dir
         self.signals = ThumbnailLoadSignals()
         
     @pyqtSlot()
     def run(self):
         """Run the thumbnail loading task."""
         try:
-            if not self.thumbnail_path or not os.path.exists(self.thumbnail_path):
+            # PORTABLE FIX: First check if we're running as an executable
+            if getattr(sys, 'frozen', False):
+                # Get the filename from the path
+                thumbnail_filename = os.path.basename(self.thumbnail_path)
+                
+                # Construct the path to the portable thumbnails directory
+                exe_dir = os.path.dirname(sys.executable)
+                portable_thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+                portable_path = os.path.join(portable_thumbnails_dir, thumbnail_filename)
+                
+                # Check if the thumbnail exists in the portable directory first
+                if os.path.exists(portable_path):
+                    logger.debug(f"Using portable thumbnail path: {portable_path}")
+                    actual_path = portable_path
+                # If not, continue with normal path resolution
+                else:
+                    # Handle relative paths by prepending the thumbnails directory
+                    actual_path = self.thumbnail_path
+                    if self.thumbnails_dir and not os.path.isabs(self.thumbnail_path):
+                        actual_path = os.path.join(self.thumbnails_dir, self.thumbnail_path)
+                    logger.debug(f"Portable path not found, using: {actual_path}")
+            else:
+                # DEV MODE: Use the exact same /data/thumbnails structure as portable mode
+                # Get the filename from the path
+                thumbnail_filename = os.path.basename(self.thumbnail_path)
+                
+                # First, check if the thumbnail is in the consistent data/thumbnails directory
+                app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                dev_thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                dev_path = os.path.join(dev_thumbnails_dir, thumbnail_filename)
+                
+                # Check if the thumbnail exists in the dev directory first 
+                if os.path.exists(dev_path):
+                    logger.debug(f"Using dev mode data/thumbnails path: {dev_path}")
+                    actual_path = dev_path
+                else:
+                    # Fall back to the regular path resolution
+                    actual_path = self.thumbnail_path
+                    if self.thumbnails_dir and not os.path.isabs(self.thumbnail_path):
+                        actual_path = os.path.join(self.thumbnails_dir, self.thumbnail_path)
+                    logger.debug(f"Dev mode data/thumbnails path not found, falling back to: {actual_path}")
+                
+            # Log path information for debugging
+            logger.debug(f"Loading thumbnail: ID={self.image_id}, Path={self.thumbnail_path}, Actual path={actual_path}")
+            
+            if not actual_path or not os.path.exists(actual_path):
+                logger.warning(f"Thumbnail file not found: {actual_path} (original: {self.thumbnail_path})")
                 self.signals.error.emit(self.image_id, "Thumbnail file not found")
                 return
             
             # Load the image using a method that doesn't cause UI flickering
             # Use QImage first and then convert to QPixmap to prevent UI flicker
-            img = QImage(self.thumbnail_path)
+            img = QImage(actual_path)
             if img.isNull():
                 self.signals.error.emit(self.image_id, "Failed to load thumbnail")
                 return
@@ -86,7 +135,7 @@ class LazyThumbnailLoader(QObject):
     optimization for both memory and disk storage.
     """
     
-    def __init__(self, max_concurrent=4, parent=None, config_manager=None):
+    def __init__(self, max_concurrent=4, parent=None, config_manager=None, thumbnails_dir=None):
         """Initialize the lazy thumbnail loader.
         
         Args:
@@ -102,6 +151,33 @@ class LazyThumbnailLoader(QObject):
         self.load_timer = QTimer(self)
         self.load_timer.timeout.connect(self.process_pending_tasks)
         self.load_timer.start(50)  # Check for pending tasks every 50ms
+        
+        # CRITICAL FIX: Always use portable directory when running as executable to avoid temp directories
+        if getattr(sys, 'frozen', False):
+            # We're running as a PyInstaller executable
+            # FORCE using the portable thumbnails directory regardless of other settings
+            exe_dir = os.path.dirname(sys.executable)
+            portable_thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+            
+            # Ensure the directory exists
+            os.makedirs(portable_thumbnails_dir, exist_ok=True)
+            
+            self.thumbnails_dir = portable_thumbnails_dir
+            logger.info(f"[PORTABLE MODE] Forcing use of portable thumbnails directory: {self.thumbnails_dir}")
+        else:
+            # For development mode, use the provided directory or get from config
+            self.thumbnails_dir = thumbnails_dir
+            # If no directory provided, try to get the default from config
+            if self.thumbnails_dir is None and config_manager:
+                thumb_path = config_manager.get("thumbnails", "path")
+                if thumb_path:
+                    self.thumbnails_dir = thumb_path
+                    logger.info(f"Using configured thumbnails directory from config: {self.thumbnails_dir}")
+                else:
+                    # In script mode, use a path relative to the script
+                    app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                    self.thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                    logger.info(f"Using script-relative thumbnails directory: {self.thumbnails_dir}")
         
         # Initialize the multi-level image cache
         self.image_cache = ImageCache(config_manager)
@@ -143,7 +219,7 @@ class LazyThumbnailLoader(QObject):
         self.active_tasks.add(image_id)
         
         # Create and start the task
-        task = ThumbnailLoadTask(image_id, thumbnail_path)
+        task = ThumbnailLoadTask(image_id, thumbnail_path, thumbnails_dir=self.thumbnails_dir)
         task.signals.finished.connect(lambda img_id, pixmap: self.on_thumbnail_loaded(img_id, pixmap, callback))
         task.signals.error.connect(lambda img_id, error: self.on_thumbnail_error(img_id, error, callback))
         self.threadpool.start(task)

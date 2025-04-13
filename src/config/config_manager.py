@@ -6,6 +6,7 @@ Handles loading, saving, and accessing application configuration.
 """
 
 import os
+import sys
 import json
 import logging
 from pathlib import Path
@@ -13,7 +14,12 @@ from pathlib import Path
 # Import cache configuration
 from src.cache.cache_config import apply_cache_config
 
-logger = logging.getLogger("StarImageBrowse.config")
+# Initialize logger
+try:
+    logger = logging.getLogger("StarImageBrowse.config")
+except Exception as e:
+    print(f"Warning: Could not initialize logger: {e}")
+    logger = None
 
 class ConfigManager:
     """Manages application configuration."""
@@ -25,18 +31,34 @@ class ConfigManager:
             config_dir (str, optional): Directory to store configuration files
             config_file (str, optional): Name of the main configuration file
         """
+        # Check if we're running in portable mode
+        self.is_portable = getattr(sys, 'frozen', False)
+        
         # Set configuration directory
         if config_dir is None:
-            # Use application directory by default
-            self.config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config")
+            if self.is_portable:
+                # In portable mode, use a directory next to executable
+                exe_dir = os.path.dirname(sys.executable)
+                self.config_dir = os.path.join(exe_dir, "config")
+                if logger:
+                    logger.info(f"Using portable config directory: {self.config_dir}")
+            else:
+                # In development mode, use application directory
+                self.config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config")
+                if logger:
+                    logger.info(f"Using development config directory: {self.config_dir}")
         else:
             self.config_dir = config_dir
+            if logger:
+                logger.info(f"Using specified config directory: {self.config_dir}")
         
         # Ensure directory exists
         os.makedirs(self.config_dir, exist_ok=True)
         
         # Set configuration file path
         self.config_file = os.path.join(self.config_dir, config_file)
+        if logger:
+            logger.info(f"Config file path: {self.config_file}")
         
         # Initialize configuration dictionary with defaults
         self.config = self._get_default_config()
@@ -47,7 +69,8 @@ class ConfigManager:
         # Initialize cache configuration
         apply_cache_config(self)
         
-        logger.info(f"Configuration manager initialized with file: {self.config_file}")
+        if logger:
+            logger.info(f"Configuration manager initialized with file: {self.config_file}")
     
     def _get_default_config(self):
         """Get the default configuration.
@@ -55,6 +78,36 @@ class ConfigManager:
         Returns:
             dict: Default configuration dictionary
         """
+        # Base paths for configuration - different for portable vs development
+        if self.is_portable:
+            # In portable mode, use paths relative to the executable
+            base_dir = os.path.dirname(sys.executable)
+            data_dir = os.path.join(base_dir, "data")
+            thumbnail_dir = os.path.join(data_dir, "thumbnails")
+            log_dir = os.path.join(data_dir, "logs")
+            db_path = os.path.join(data_dir, "image_database.db")
+        else:
+            # In development mode, use paths relative to the source code
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            data_dir = os.path.join(base_dir, "data")
+            thumbnail_dir = os.path.join(data_dir, "thumbnails")
+            # Use the standardized data/logs directory in all modes
+            log_dir = os.path.join(data_dir, "logs")
+            db_path = os.path.join(data_dir, "star_image_browse.db")
+        
+        # Make sure the directories exist
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(thumbnail_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Log the important paths
+        if logger:
+            logger.info(f"Base directory: {base_dir}")
+            logger.info(f"Data directory: {data_dir}")
+            logger.info(f"Thumbnails directory: {thumbnail_dir}")
+            logger.info(f"Log directory: {log_dir}")
+            logger.info(f"Database path: {db_path}")
+        
         return {
             "app": {
                 "first_run": True,
@@ -64,10 +117,11 @@ class ConfigManager:
             },
             "thumbnails": {
                 "size": 200,
-                "quality": 85
+                "quality": 85,
+                "path": thumbnail_dir  # Use the correctly determined path
             },
             "ai": {
-                "model_path": os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "model"),
+                "model_path": os.path.join(base_dir, "model"),
                 "device": "auto",  # Options: auto, cpu, cuda
                 "batch_size": 1
             },
@@ -86,7 +140,7 @@ class ConfigManager:
             },
             
             "database": {
-                "path": os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "star_image_browse.db")
+                "path": db_path  # Use the correctly determined path
             },
             "monitor": {
                 "watch_folders": False,
@@ -95,6 +149,9 @@ class ConfigManager:
             "ui": {
                 "show_descriptions": True,
                 "thumbnails_per_row": 0  # 0 = auto based on window size
+            },
+            "logging": {
+                "path": log_dir  # Store logs in the correct location
             },
             "ollama": {
                 "server_url": "http://localhost:11434",

@@ -211,3 +211,16 @@ class BackgroundTaskManager:
         if task_id in self.active_tasks:
             return getattr(self.active_tasks[task_id], 'cancelled', False)
         return False
+        
+    def cancel_all_tasks(self):
+        """Cancel all active tasks.
+        
+        Returns:
+            int: Number of tasks cancelled
+        """
+        count = 0
+        for task_id in list(self.active_tasks.keys()):
+            if self.cancel_task(task_id):
+                count += 1
+        logger.debug(f"Cancelled {count} background tasks")
+        return count

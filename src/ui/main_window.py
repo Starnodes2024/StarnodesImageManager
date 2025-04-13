@@ -6,7 +6,9 @@ Implements the main application window and UI components.
 """
 
 import os
+import sys
 import logging
+import sqlite3
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ExifTags
@@ -18,7 +20,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QDialogButtonBox, QProgressDialog
 )
 from PyQt6.QtGui import QAction, QIcon, QPixmap
-from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool
+from PyQt6.QtCore import Qt, QSize, QDir, pyqtSignal, QThreadPool, QTimer
 
 # Local imports
 from .thumbnail_browser_factory import create_thumbnail_browser
@@ -120,19 +122,30 @@ class MainWindow(QMainWindow):
         
         # Create required directories
         required_dirs = [
-            "thumbnails",
-            "logs",
             "data",
-            "temp"  # Temporary files directory for processing
+            "data/thumbnails",  # Thumbnails location in data subdirectory
+            "data/logs",        # Logs location in data subdirectory
+            "temp"               # Temporary files directory for processing
         ]
+        
+        # Note: The old separate 'logs' directory is no longer used. All logs are now in data/logs.
         
         for dir_name in required_dirs:
             dir_path = os.path.join(app_dir, dir_name)
             os.makedirs(dir_path, exist_ok=True)
             logger.info(f"Ensured directory exists: {dir_path}")
         
-        # Set thumbnails directory
-        thumbnails_dir = os.path.join(app_dir, "thumbnails")
+        # Get thumbnails directory from config manager
+        # This ensures we use the same path that was set in main.py (/data/thumbnails)
+        thumbnails_dir = self.config_manager.get("thumbnails", "path")
+        
+        # Double-check that the directory exists
+        if not os.path.exists(thumbnails_dir):
+            logger.warning(f"Thumbnails directory from config does not exist: {thumbnails_dir}")
+            os.makedirs(thumbnails_dir, exist_ok=True)
+            logger.info(f"Created thumbnails directory: {thumbnails_dir}")
+        
+        logger.info(f"Using thumbnails directory from config: {thumbnails_dir}")
         
         # Initialize thumbnail generator
         thumb_size = self.config_manager.get("thumbnails", "size", 200)
@@ -273,6 +286,251 @@ class MainWindow(QMainWindow):
             )
         
         logger.info("Application components initialized")
+        
+    def convert_thumbnail_paths(self):
+        """Convert absolute thumbnail paths to relative paths in the database.
+        
+        This improves portability and makes backup/restore operations easier.
+        """
+        try:
+            logger.info("Starting thumbnail path conversion process")
+            # Import the conversion utility
+            from src.utilities.convert_thumbnail_paths import convert_to_relative_paths
+            
+            # Define a signal handler for conversion completion if needed
+            if not hasattr(self, '_conversion_handler_connected'):
+                self._conversion_handler_connected = True
+                # Connect the worker's result signal in the run_conversion wrapper
+            
+            # Ensure we have the thumbnails directory path ready for the conversion
+            thumbnails_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "thumbnails"
+            )
+            
+            # Run the conversion in the background using our existing DB connection
+            def run_conversion(progress_callback=None):
+                # The progress_callback is automatically passed by the Worker class
+                try:
+                    logger.debug("Starting thumbnail path conversion in background thread")
+                    db_path = self.db_manager.db_path
+                    success, unchanged, errors = convert_to_relative_paths(
+                        db_path=db_path, 
+                        dry_run=False,
+                        db_manager=self.db_manager  # Pass the existing DB manager
+                    )
+                    logger.debug(f"Conversion complete: {success} converted, {unchanged} unchanged, {errors} errors")
+                    return (success, unchanged, errors)
+                except Exception as thread_error:
+                    logger.error(f"Error in thumbnail conversion thread: {thread_error}")
+                    return (0, 0, 1)  # Return error counts
+            
+            # Define the completion handler
+            def on_conversion_complete(result):
+                if result:
+                    success, unchanged, errors = result
+                    self._on_conversion_complete(success, unchanged, errors)
+            
+            # Run the conversion in a separate thread
+            from src.ui.worker import Worker
+            worker = Worker(run_conversion)
+            worker.signals.result.connect(on_conversion_complete)
+            self.threadpool.start(worker)
+            logger.info("Thumbnail path conversion task queued")
+            
+        except Exception as e:
+            logger.error(f"Failed to queue thumbnail path conversion: {e}")
+
+    def _on_conversion_complete(self, success, unchanged, errors):
+        """Handle completion of thumbnail path conversion.
+        
+        Args:
+            success (int): Number of paths successfully converted
+            unchanged (int): Number of paths that did not need conversion
+            errors (int): Number of errors encountered
+        """
+        if errors > 0:
+            logger.warning(f"Thumbnail path conversion completed with {errors} errors")
+        else:
+            logger.info(f"Thumbnail path conversion completed: {success} converted, {unchanged} unchanged")
+        
+        # Show notification if paths were converted
+        if success > 0:
+            from src.ui.notification_manager import NotificationType
+            message = f"Optimized {success} thumbnail paths for better portability"
+            self.notification_manager.show_notification(
+                message, 
+                "Thumbnail Paths Optimized", 
+                NotificationType.INFO
+            )
+            
+    def on_convert_thumbnail_paths(self):
+        """Handle the Convert Thumbnail Paths to Relative menu action.
+        
+        This utility converts absolute thumbnail paths to relative paths in the database,
+        making the application more portable for backup and restore operations.
+        """
+        try:
+            # Show confirmation dialog
+            confirm = QMessageBox.question(
+                self,
+                "Convert Thumbnail Paths",
+                "This utility will convert absolute thumbnail paths to relative paths in the database, \n"
+                "making the application more portable for backup and restore operations.\n\n"
+                "Do you want to continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            
+            # Create progress dialog
+            progress_dialog = ProgressDialog(
+                "Converting Thumbnail Paths",
+                "Preparing to convert thumbnail paths...",
+                parent=self,
+                cancellable=True
+            )
+            progress_dialog.show()
+            QApplication.processEvents()
+            
+            # Run the conversion in a background thread
+            from src.utilities.convert_thumbnail_paths import convert_to_relative_paths
+            
+            # Define a function that accepts but ignores progress_callback
+            def run_conversion(progress_callback=None):
+                # Explicitly accept progress_callback parameter but don't use it
+                try:
+                    # Simply run the conversion directly
+                    db_path = self.db_manager.db_path
+                    thumbnails_dir = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "thumbnails"
+                    )
+                    
+                    # Connect to the database directly
+                    import sqlite3
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    
+                    # Get all images with absolute thumbnail paths
+                    cursor.execute("SELECT image_id, thumbnail_path FROM images WHERE thumbnail_path IS NOT NULL")
+                    images = cursor.fetchall()
+                    
+                    success_count = 0
+                    unchanged_count = 0
+                    error_count = 0
+                    
+                    for image in images:
+                        try:
+                            image_id = image['image_id']
+                            thumbnail_path = image['thumbnail_path']
+                            
+                            # Skip if already relative (no directory path)
+                            if thumbnail_path and not os.path.dirname(thumbnail_path):
+                                unchanged_count += 1
+                                continue
+                            
+                            # Skip if not an absolute path
+                            if not thumbnail_path or not os.path.isabs(thumbnail_path):
+                                unchanged_count += 1
+                                continue
+                            
+                            # Check if it's within the thumbnails directory
+                            thumbnail_rel_path = os.path.relpath(thumbnail_path, thumbnails_dir)
+                            if thumbnail_rel_path.startswith(".."): 
+                                # Path is outside thumbnails directory, extract filename only
+                                thumbnail_rel_path = os.path.basename(thumbnail_path)
+                            
+                            # Update the database
+                            cursor.execute(
+                                "UPDATE images SET thumbnail_path = ? WHERE image_id = ?", 
+                                (thumbnail_rel_path, image_id)
+                            )
+                            success_count += 1
+                        except Exception as e:
+                            logger.error(f"Error processing image {image_id}: {e}")
+                            error_count += 1
+                    
+                    # Commit changes
+                    if success_count > 0:
+                        conn.commit()
+                    
+                    # Close connection
+                    conn.close()
+                    
+                    return (success_count, unchanged_count, error_count)
+                    
+                except Exception as thread_error:
+                    logger.error(f"Error in thumbnail conversion thread: {thread_error}")
+                    return (0, 0, 1)  # Return error counts
+            
+            # Define completion handler
+            def on_conversion_complete(result):
+                if result:
+                    success, unchanged, errors = result
+                    
+                    # Update progress dialog
+                    progress_dialog.update_operation("Conversion complete")
+                    progress_dialog.update_progress(100, 100)
+                    progress_dialog.log_message(f"Paths converted: {success}")
+                    progress_dialog.log_message(f"Paths unchanged: {unchanged}")
+                    progress_dialog.log_message(f"Errors: {errors}")
+                    
+                    # Show notification
+                    self._on_conversion_complete(success, unchanged, errors)
+                    
+                    if hasattr(progress_dialog, 'cancel_button'):
+                        progress_dialog.cancel_button.setText("Close")
+                        try:
+                            progress_dialog.cancel_button.clicked.disconnect()
+                        except Exception:
+                            pass  # Button might not be connected
+                        progress_dialog.cancel_button.clicked.connect(progress_dialog.accept)
+            
+            # Define error handler
+            def on_error(error_info):
+                error_msg = error_info[0] if isinstance(error_info, tuple) and len(error_info) > 0 else str(error_info)
+                progress_dialog.log_message(f"Error: {error_msg}")
+                progress_dialog.update_operation("Conversion failed")
+                
+                # Log error
+                logger.error(f"Error during thumbnail path conversion: {error_msg}")
+                
+                # Show error in status bar
+                self.status_bar.showMessage(f"Error converting thumbnail paths: {error_msg}")
+                
+                # Enable the close button
+                if hasattr(progress_dialog, 'cancel_button'):
+                    progress_dialog.cancel_button.setText("Close")
+                    try:
+                        progress_dialog.cancel_button.clicked.disconnect()
+                    except Exception:
+                        pass  # Button might not be connected
+                    progress_dialog.cancel_button.clicked.connect(progress_dialog.accept)
+            
+            # Create and run worker
+            from src.ui.worker import Worker
+            worker = Worker(run_conversion)
+            worker.signals.result.connect(on_conversion_complete)
+            worker.signals.error.connect(on_error)
+            
+            # Connect cancel button
+            if hasattr(progress_dialog, 'cancel_button'):
+                progress_dialog.cancel_button.clicked.connect(progress_dialog.reject)
+            
+            # Start the worker
+            self.threadpool.start(worker)
+            
+        except Exception as e:
+            logger.error(f"Error starting thumbnail path conversion: {e}")
+            self.notification_manager.show_message_box(
+                "Conversion Error",
+                f"An error occurred while converting thumbnail paths: {str(e)}",
+                NotificationType.ERROR
+            )
     
     def setup_menus(self):
         """Set up application menus."""
@@ -395,8 +653,8 @@ class MainWindow(QMainWindow):
         db_submenu = tools_menu.addMenu("Database")
         
         # Comprehensive database maintenance tool
-        maintenance_action = db_submenu.addAction("Database Maintenance")
-        maintenance_action.triggered.connect(self.on_database_maintenance)
+        # maintenance_action = db_submenu.addAction("Database Maintenance")
+        # maintenance_action.triggered.connect(self.on_database_maintenance)
         
         # Dedicated database rebuild for corruption issues
         rebuild_action = db_submenu.addAction("Rebuild Corrupted Database")
@@ -413,6 +671,13 @@ class MainWindow(QMainWindow):
         import_db_action = db_submenu.addAction("Import Database")
         import_db_action.triggered.connect(self.on_import_database)
         
+        # Add separator before utility actions
+        db_submenu.addSeparator()
+        
+        # Thumbnail path conversion action
+        convert_thumbnails_action = db_submenu.addAction("Convert Thumbnail Paths to Relative")
+        convert_thumbnails_action.triggered.connect(self.on_convert_thumbnail_paths)
+        
         # Settings action
         tools_menu.addSeparator()
         settings_action = tools_menu.addAction("Settings")
@@ -421,7 +686,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager V0.9.6")
+        self.setWindowTitle("STARNODES Image Manager V0.9.7")
         self.setMinimumSize(1024, 768)
         
         # Create menu bar if it doesn't exist
@@ -3287,8 +3552,7 @@ class MainWindow(QMainWindow):
         progress_dialog = ProgressDialog(
             "Emptying Database", 
             "Removing all data from database...", 
-            0, 100, 
-            self,
+            parent=self,
             cancellable=False
         )
         progress_dialog.show()
@@ -3296,14 +3560,89 @@ class MainWindow(QMainWindow):
         
         try:
             # Set progress to 25%
-            progress_dialog.set_value(25)
+            progress_dialog.update_progress(25, 100)
             QApplication.processEvents()
             
-            # Clear the database
-            self.db_manager.empty_database()
+            # Windows-friendly approach: Use in-memory operations to avoid file locking issues
+            try:
+                # Create an in-memory database
+                temp_conn = sqlite3.connect(':memory:')
+                temp_cursor = temp_conn.cursor()
+                
+                # Create empty tables with the same schema
+                temp_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS folders (
+                    folder_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    enabled INTEGER DEFAULT 1,
+                    last_scan_time TEXT
+                )''')
+                
+                temp_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS images (
+                    image_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folder_id INTEGER,
+                    filename TEXT NOT NULL,
+                    full_path TEXT NOT NULL UNIQUE,
+                    thumbnail_path TEXT,
+                    ai_description TEXT,
+                    user_description TEXT,
+                    file_size INTEGER,
+                    file_hash TEXT,
+                    date_added TEXT,
+                    date_modified TEXT,
+                    width INTEGER,
+                    height INTEGER,
+                    image_format TEXT,
+                    FOREIGN KEY (folder_id) REFERENCES folders(folder_id)
+                )''')
+                
+                temp_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS catalogs (
+                    catalog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    created_date TEXT
+                )''')
+                
+                temp_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS catalog_images (
+                    catalog_id INTEGER,
+                    image_id INTEGER,
+                    added_date TEXT,
+                    PRIMARY KEY (catalog_id, image_id),
+                    FOREIGN KEY (catalog_id) REFERENCES catalogs(catalog_id),
+                    FOREIGN KEY (image_id) REFERENCES images(image_id)
+                )''')
+                
+                # Disconnect from existing database
+                self.db_manager.disconnect()
+                
+                # Give time for connections to be released
+                QApplication.processEvents()
+                
+                # Create a new connection to the database file
+                db_path = self.db_manager.db_path
+                
+                # Make sure the directory exists
+                os.makedirs(os.path.dirname(db_path), exist_ok=True)
+                
+                # Use vacuum into approach instead of delete/recreate
+                new_conn = sqlite3.connect(db_path)
+                temp_conn.backup(new_conn)
+                new_conn.close()
+                temp_conn.close()
+                
+                # Force database recreation by reconnecting
+                self.db_manager = type(self.db_manager)(db_path)
+                logger.info("Database emptied and recreated with fresh schema")
+                
+            except Exception as e:
+                logger.error(f"Error recreating database: {e}")
+                raise
             
             # Set progress to 75%
-            progress_dialog.set_value(75)
+            progress_dialog.update_progress(75, 100)
             QApplication.processEvents()
             
             # Clear thumbnails folder
@@ -3318,18 +3657,38 @@ class MainWindow(QMainWindow):
                     logger.error(f"Error clearing thumbnail directory: {e}")
             
             # Set progress to 100%
-            progress_dialog.set_value(100)
+            progress_dialog.update_progress(100, 100, "Complete")
             QApplication.processEvents()
             
-            # Close progress dialog
-            progress_dialog.close()
+            # Force the progress dialog to close
+            try:
+                # First try the proper way using close_when_finished
+                progress_dialog.close_when_finished()
+                # Also force the dialog to close if it's still visible after a short delay
+                QTimer.singleShot(1000, progress_dialog.accept)
+            except Exception as dialog_err:
+                logger.error(f"Error closing dialog: {dialog_err}")
+                try:
+                    # Fallback to direct close if the dialog is still visible
+                    progress_dialog.accept()
+                except:
+                    pass
             
             # Clear UI
-            self.folder_panel.refresh()
-            self.thumbnail_browser.clear_thumbnails()
-            
-            # Update header
-            self.thumbnail_browser.header_label.setText("Database Emptied")
+            try:
+                # Use refresh_folders instead of refresh if it exists
+                if hasattr(self.folder_panel, 'refresh_folders'):
+                    self.folder_panel.refresh_folders()
+                elif hasattr(self.folder_panel, 'refresh'):
+                    self.folder_panel.refresh()
+                
+                # Clear the thumbnail browser
+                self.thumbnail_browser.clear_thumbnails()
+                
+                # Update header
+                self.thumbnail_browser.header_label.setText("Database Emptied")
+            except Exception as ui_err:
+                logger.warning(f"Non-critical UI update error: {ui_err}")
             
             # Show success message
             self.notification_manager.show_notification(
@@ -3340,8 +3699,20 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Database has been emptied successfully")
             
         except Exception as e:
-            # Close progress dialog
-            progress_dialog.close()
+            # Make sure progress dialog closes properly in error cases
+            try:
+                # Try proper close with finished state
+                progress_dialog.close_when_finished()
+                # Also force accept after a delay if needed
+                QTimer.singleShot(1000, progress_dialog.accept)
+            except Exception as dialog_err:
+                logger.error(f"Error closing dialog in exception handler: {dialog_err}")
+                try:
+                    # Fallback to direct close/accept
+                    progress_dialog.accept()
+                except:
+                    # Last resort close if accept fails
+                    progress_dialog.close()
             
             # Show error message
             logger.error(f"Error emptying database: {e}")
@@ -3360,7 +3731,21 @@ class MainWindow(QMainWindow):
         """Handle the Export Database action.
         
         Exports the database to a file selected by the user.
+        Optionally includes thumbnails as a ZIP file.
         """
+        # Ask user if they want to include thumbnails
+        include_thumbnails_msg = QMessageBox(
+            QMessageBox.Icon.Question,
+            "Export Options",
+            "Would you like to include thumbnails in the export?\n\n" +
+            "This will create a ZIP file with the same name as the database export.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self
+        )
+        
+        include_thumbnails_msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        include_thumbnails = include_thumbnails_msg.exec() == QMessageBox.StandardButton.Yes
+        
         # Show file dialog to select export location
         file_path, _ = QFileDialog.getSaveFileName(
             self,
@@ -3399,6 +3784,50 @@ class MainWindow(QMainWindow):
             import shutil
             shutil.copy2(self.db_manager.db_path, file_path)
             
+            # Export thumbnails if requested
+            thumbnails_exported = False
+            thumbnails_size = 0
+            if include_thumbnails:
+                # Update progress
+                progress_dialog.update_progress(60, 100, "Exporting thumbnails...")
+                QApplication.processEvents()
+                
+                # Create ZIP file with thumbnails
+                import zipfile
+                import glob
+                
+                # Create ZIP file with same name as database but .zip extension
+                zip_path = os.path.splitext(file_path)[0] + ".zip"
+                app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
+                app_thumbnails_dir = os.path.join(app_dir, "thumbnails")
+                
+                # Check if thumbnails directory exists
+                if os.path.exists(app_thumbnails_dir) and os.path.isdir(app_thumbnails_dir):
+                    thumbnail_count = 0
+                    total_files = len(os.listdir(app_thumbnails_dir))
+                    
+                    # Create a ZIP file with all thumbnails
+                    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        for i, file in enumerate(glob.glob(os.path.join(app_thumbnails_dir, "*.*"))):
+                            # Update progress periodically
+                            if i % 100 == 0:
+                                progress_percent = 60 + min(20, int((i / total_files) * 20))
+                                progress_dialog.update_progress(
+                                    progress_percent, 100,
+                                    f"Adding thumbnails to export ({i}/{total_files})..."
+                                )
+                                QApplication.processEvents()
+                            
+                            thumbnail_count += 1
+                            # Add file to ZIP with relative path inside 'thumbnails' directory
+                            zipf.write(
+                                file,
+                                os.path.join("thumbnails", os.path.basename(file))
+                            )
+                    
+                    thumbnails_exported = True
+                    thumbnails_size = os.path.getsize(zip_path)
+            
             # Update progress
             progress_dialog.update_progress(80, 100, "Verifying export...")
             QApplication.processEvents()
@@ -3419,13 +3848,22 @@ class MainWindow(QMainWindow):
             # Close progress dialog properly
             progress_dialog.close_when_finished()
             
-            # Show success message
+            # Show success message with thumbnail info if applicable
+            success_msg = f"Database was successfully exported to:\n{file_path}\nSize: {size_formatted}"
+            if thumbnails_exported:
+                thumbnails_size_formatted = self._format_file_size(thumbnails_size)
+                success_msg += f"\n\nThumbnails were exported to:\n{zip_path}\nSize: {thumbnails_size_formatted}"
+            
             self.notification_manager.show_notification(
                 "Database Export Complete",
-                f"Database was successfully exported to:\n{file_path}\nSize: {size_formatted}",
+                success_msg,
                 NotificationType.SUCCESS
             )
-            self.status_bar.showMessage(f"Database exported to: {file_path}")
+            
+            if thumbnails_exported:
+                self.status_bar.showMessage(f"Database and thumbnails exported successfully")
+            else:
+                self.status_bar.showMessage(f"Database exported to: {file_path}")
             
         except Exception as e:
             # Close progress dialog properly
@@ -3449,6 +3887,7 @@ class MainWindow(QMainWindow):
         
         Imports a database from a file selected by the user.
         If the target database already contains data, the imported data will be merged.
+        Also checks for and optionally imports thumbnails from a ZIP file if available.
         """
         # Show file dialog to select import file
         file_path, _ = QFileDialog.getOpenFileName(
@@ -3470,18 +3909,26 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Ok
             )
             return
+            
+        # Check if a corresponding thumbnail ZIP file exists
+        thumbnail_zip_path = os.path.splitext(file_path)[0] + ".zip"
+        has_thumbnail_zip = os.path.exists(thumbnail_zip_path)
         
         # Show confirmation dialog with options
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QRadioButton, QLabel, QDialogButtonBox
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QRadioButton, QLabel, QDialogButtonBox, QCheckBox, QGroupBox
         
         dialog = QDialog(self)
         dialog.setWindowTitle("Import Options")
-        dialog.setMinimumWidth(400)
+        dialog.setMinimumWidth(450)
         
         layout = QVBoxLayout(dialog)
         
         # Add description label
         layout.addWidget(QLabel("Select how to handle the imported database:"))
+        
+        # Create group box for database options
+        db_group = QGroupBox("Database Import Options")
+        db_layout = QVBoxLayout(db_group)
         
         # Add option radio buttons
         merge_option = QRadioButton("Merge with existing database (add new images and folders)")
@@ -3490,13 +3937,49 @@ class MainWindow(QMainWindow):
         # Set merge as default
         merge_option.setChecked(True)
         
-        layout.addWidget(merge_option)
-        layout.addWidget(replace_option)
+        db_layout.addWidget(merge_option)
+        db_layout.addWidget(replace_option)
         
         # Add warning label for replace option
         warning_label = QLabel("Warning: Replacing the database will remove all current data!")
         warning_label.setStyleSheet("color: red;")
-        layout.addWidget(warning_label)
+        db_layout.addWidget(warning_label)
+        
+        layout.addWidget(db_group)
+        
+        # Add thumbnail import option if a ZIP file exists
+        import_thumbnails_checkbox = None
+        if has_thumbnail_zip:
+            thumb_group = QGroupBox("Thumbnail Options")
+            thumb_layout = QVBoxLayout(thumb_group)
+            
+            # Create radio buttons for thumbnail options to match the database options style
+            import_thumbnails_option = QRadioButton("Import thumbnails from the associated ZIP file")
+            skip_thumbnails_option = QRadioButton("Skip importing thumbnails")
+            
+            # Set import as default
+            import_thumbnails_option.setChecked(True)
+            
+            # Add to layout
+            thumb_layout.addWidget(import_thumbnails_option)
+            thumb_layout.addWidget(skip_thumbnails_option)
+            
+            # Add information about the ZIP file
+            import zipfile
+            try:
+                with zipfile.ZipFile(thumbnail_zip_path, 'r') as zipf:
+                    thumbnail_count = len(zipf.namelist())
+                    thumb_info_label = QLabel(f"Found {thumbnail_count} thumbnails in:\n{thumbnail_zip_path}")
+                    thumb_layout.addWidget(thumb_info_label)
+            except Exception as e:
+                thumb_error_label = QLabel(f"Error reading the thumbnail ZIP file: {str(e)}")
+                thumb_error_label.setStyleSheet("color: red;")
+                thumb_layout.addWidget(thumb_error_label)
+                import_thumbnails_option.setChecked(False)
+                skip_thumbnails_option.setChecked(True)
+                import_thumbnails_option.setEnabled(False)
+            
+            layout.addWidget(thumb_group)
         
         # Add button box
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | 
@@ -3509,8 +3992,9 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return  # User cancelled
         
-        # Get selected option
+        # Get selected options
         import_mode = "merge" if merge_option.isChecked() else "replace"
+        import_thumbnails = has_thumbnail_zip and import_thumbnails_option and import_thumbnails_option.isChecked()
         
         # Additional confirmation for replace mode
         if import_mode == "replace":
@@ -3623,6 +4107,93 @@ class MainWindow(QMainWindow):
                         pass
                     
                     # Update progress
+                    progress_dialog.update_progress(90, 100, "Database import completed")
+                    QApplication.processEvents()
+                    
+                    # Import thumbnails if requested
+                    thumbnails_imported = False
+                    if import_thumbnails:
+                        try:
+                            progress_dialog.update_progress(92, 100, "Importing thumbnails...")
+                            QApplication.processEvents()
+                            
+                            import zipfile
+                            import shutil
+                            
+                            # CRITICAL FIX: Always use the /data/thumbnails directory structure for both portable and script modes
+                            if getattr(sys, 'frozen', False):
+                                # Portable mode - use directory next to executable
+                                exe_dir = os.path.dirname(sys.executable)
+                                thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+                            else:
+                                # Script mode - use directory relative to database
+                                app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
+                                thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                            
+                            # Create thumbnails directory if it doesn't exist
+                            os.makedirs(thumbnails_dir, exist_ok=True)
+                            
+                            logger.info(f"Importing thumbnails to: {thumbnails_dir}")
+                            
+                            # Extract the ZIP file
+                            with zipfile.ZipFile(thumbnail_zip_path, 'r') as zipf:
+                                # Get list of files to extract
+                                file_list = zipf.namelist()
+                                total_files = len(file_list)
+                                
+                                # Extract files
+                                for i, file in enumerate(file_list):
+                                    # Update progress periodically
+                                    if i % 100 == 0:
+                                        progress_percent = 92 + min(7, int((i / total_files) * 7))
+                                        progress_dialog.update_progress(
+                                            progress_percent, 100,
+                                            f"Extracting thumbnails ({i}/{total_files})..."
+                                        )
+                                        QApplication.processEvents()
+                                    
+                                    # Debugging to see what files are being extracted
+                                    logger.debug(f"Extracting thumbnail file: {file}")
+                                    
+                                    # Extract file to thumbnails directory
+                                    # Get the basename regardless of path structure
+                                    filename = os.path.basename(file)
+                                    target_path = os.path.join(thumbnails_dir, filename)
+                                    
+                                    try:
+                                        # First, extract the file to a temporary buffer
+                                        content = zipf.read(file)
+                                        
+                                        # Write the content directly to the target path
+                                        with open(target_path, 'wb') as f:
+                                            f.write(content)
+                                        
+                                        logger.debug(f"Successfully extracted {filename} to {target_path}")
+                                    except Exception as e:
+                                        logger.error(f"Error extracting {file}: {e}")
+                                        # Try the old extraction method as fallback
+                                        try:
+                                            if '/' in file or '\\' in file:
+                                                # Extract to parent directory first
+                                                temp_path = os.path.join(os.path.dirname(thumbnails_dir), "temp_extract")
+                                                os.makedirs(temp_path, exist_ok=True)
+                                                zipf.extract(file, temp_path)
+                                                
+                                                # Move the file to final destination
+                                                extracted_file = os.path.join(temp_path, file)
+                                                if os.path.exists(extracted_file):
+                                                    shutil.copy2(extracted_file, target_path)
+                                            else:
+                                                # Direct extraction to thumbnails directory
+                                                zipf.extract(file, thumbnails_dir)
+                                        except Exception as e2:
+                                            logger.error(f"Fallback extraction also failed for {file}: {e2}")
+                            
+                            thumbnails_imported = True
+                        except Exception as e:
+                            logger.error(f"Error importing thumbnails: {e}")
+                    
+                    # Update progress
                     progress_dialog.update_progress(100, 100, "Database import completed successfully")
                     QApplication.processEvents()
                     
@@ -3634,12 +4205,20 @@ class MainWindow(QMainWindow):
                     self.thumbnail_browser.clear_thumbnails()
                     
                     # Show success message
+                    success_msg = f"Successfully replaced database with {folder_count} folders and {image_count} images."
+                    if thumbnails_imported:
+                        success_msg += "\n\nThumbnails were successfully imported."
+                    
                     self.notification_manager.show_notification(
                         "Database Import Complete",
-                        f"Successfully replaced database with {folder_count} folders and {image_count} images.",
+                        success_msg,
                         NotificationType.SUCCESS
                     )
-                    self.status_bar.showMessage("Database has been successfully replaced")
+                    
+                    if thumbnails_imported:
+                        self.status_bar.showMessage("Database and thumbnails have been successfully replaced")
+                    else:
+                        self.status_bar.showMessage("Database has been successfully replaced")
                     
                 except Exception as e:
                     # Restore from backup if copy fails
@@ -3771,6 +4350,89 @@ class MainWindow(QMainWindow):
                 # Close source connection
                 source_conn.close()
                 
+                # Import thumbnails if requested
+                thumbnails_imported = False
+                if import_thumbnails:
+                    try:
+                        progress_dialog.update_progress(90, 100, "Importing thumbnails...")
+                        QApplication.processEvents()
+                        
+                        import zipfile
+                        import shutil
+                        
+                        # CRITICAL FIX: Always use the /data/thumbnails directory structure for both portable and script modes
+                        if getattr(sys, 'frozen', False):
+                            # Portable mode - use directory next to executable
+                            exe_dir = os.path.dirname(sys.executable)
+                            thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+                        else:
+                            # Script mode - use directory relative to database
+                            app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
+                            thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                        
+                        # Create thumbnails directory if it doesn't exist
+                        os.makedirs(thumbnails_dir, exist_ok=True)
+                        
+                        logger.info(f"Importing thumbnails to: {thumbnails_dir}")
+                        
+                        # Extract the ZIP file
+                        with zipfile.ZipFile(thumbnail_zip_path, 'r') as zipf:
+                            # Get list of files to extract
+                            file_list = zipf.namelist()
+                            total_files = len(file_list)
+                            
+                            # Extract files
+                            for i, file in enumerate(file_list):
+                                # Update progress periodically
+                                if i % 100 == 0:
+                                    progress_percent = 90 + min(5, int((i / total_files) * 5))
+                                    progress_dialog.update_progress(
+                                        progress_percent, 100,
+                                        f"Extracting thumbnails ({i}/{total_files})..."
+                                    )
+                                    QApplication.processEvents()
+                                
+                                # Debugging to see what files are being extracted
+                                logger.debug(f"Extracting thumbnail file: {file}")
+                                
+                                # Extract file to thumbnails directory
+                                # Get the basename regardless of path structure
+                                filename = os.path.basename(file)
+                                target_path = os.path.join(thumbnails_dir, filename)
+                                
+                                try:
+                                    # First, extract the file to a temporary buffer
+                                    content = zipf.read(file)
+                                    
+                                    # Write the content directly to the target path
+                                    with open(target_path, 'wb') as f:
+                                        f.write(content)
+                                    
+                                    logger.debug(f"Successfully extracted {filename} to {target_path}")
+                                except Exception as e:
+                                    logger.error(f"Error extracting {file}: {e}")
+                                    # Try the old extraction method as fallback
+                                    try:
+                                        if '/' in file or '\\' in file:
+                                            # Extract to parent directory first
+                                            temp_path = os.path.join(os.path.dirname(thumbnails_dir), "temp_extract")
+                                            os.makedirs(temp_path, exist_ok=True)
+                                            zipf.extract(file, temp_path)
+                                            
+                                            # Move the file to final destination
+                                            extracted_file = os.path.join(temp_path, file)
+                                            if os.path.exists(extracted_file):
+                                                shutil.copy2(extracted_file, target_path)
+                                        else:
+                                            # Direct extraction to thumbnails directory
+                                            zipf.extract(file, thumbnails_dir)
+                                    except Exception as e2:
+                                        logger.error(f"Fallback extraction also failed for {file}: {e2}")
+                        
+                        thumbnails_imported = True
+                    except Exception as e:
+                        logger.error(f"Error importing thumbnails: {e}")
+                
                 # Update progress
                 progress_dialog.update_progress(95, 100, "Finalizing database import...")
                 QApplication.processEvents()
@@ -3797,14 +4459,23 @@ class MainWindow(QMainWindow):
                 self.update_ui_counts()
                 self.refresh_current_view()
                 
-                # Show success message
+                # Show success message with thumbnail info if applicable
+                success_msg = f"Successfully merged database with {added_folders} new folders and {added_images} new images.\n"
+                success_msg += f"Skipped: {skipped_images} duplicate/invalid images."
+                
+                if thumbnails_imported:
+                    success_msg += "\n\nThumbnails were successfully imported."
+                
                 self.notification_manager.show_notification(
                     "Database Import Complete",
-                    f"Successfully merged database with {added_folders} new folders and {added_images} new images.\n"
-                    f"Skipped: {skipped_images} duplicate/invalid images.",
+                    success_msg,
                     NotificationType.SUCCESS
                 )
-                self.status_bar.showMessage("Database has been successfully merged")
+                
+                if thumbnails_imported:
+                    self.status_bar.showMessage("Database and thumbnails have been successfully merged")
+                else:
+                    self.status_bar.showMessage("Database has been successfully merged")
         
         except Exception as e:
             # Close progress dialog

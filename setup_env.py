@@ -12,7 +12,7 @@ import platform
 
 def setup_virtual_environment():
     """Set up a virtual environment for the application."""
-    print("StarImageBrowse Environment Setup")
+    print("Starnodes Image Manager Environment Setup")
     print("=================================")
     
     # Create virtual environment if it doesn't exist

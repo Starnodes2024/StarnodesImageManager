@@ -86,7 +86,7 @@ class FolderPanel(QWidget):
             container_layout.addWidget(banner_label)
             
             # GitHub link with themed color
-            github_link = QLabel(f'<a href="https://github.com/Starnodes2024/StarnodesImageManager" style="color:{banner_link_color};">Vers 0.96 Visit Github</a>')
+            github_link = QLabel(f'<a href="https://github.com/Starnodes2024/StarnodesImageManager" style="color:{banner_link_color};">Vers 1.0.0 Visit Github</a>')
             github_link.setOpenExternalLinks(True)
             github_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
             github_link.setStyleSheet(f"color: {banner_link_color};")

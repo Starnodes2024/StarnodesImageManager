@@ -73,6 +73,14 @@ class ThumbnailBrowser(QWidget):
             thumbnails_dir=thumbnails_dir
         )
         
+        # Initialize preview size settings from config
+        if config_manager:
+            from .thumbnail_widget import ThumbnailWidget
+            preview_size = config_manager.get("thumbnails", "preview_size", 700)
+            preview_delay = config_manager.get("thumbnails", "preview_delay", 300)
+            ThumbnailWidget.set_preview_size(preview_size)
+            ThumbnailWidget.set_hover_delay(preview_delay)
+        
         self.setup_ui()
     
     def setup_ui(self):
@@ -211,7 +219,7 @@ class ThumbnailBrowser(QWidget):
                 height=height
             )
             
-            # Connect signals
+            # Connect signals to handlers
             thumbnail.clicked.connect(self.on_thumbnail_clicked)
             thumbnail.double_clicked.connect(self.on_thumbnail_double_clicked)
             thumbnail.context_menu_requested.connect(self.on_thumbnail_context_menu)
@@ -234,25 +242,35 @@ class ThumbnailBrowser(QWidget):
     
     def clear_thumbnails(self):
         """Clear all thumbnails from the browser."""
-        # Clear selection
-        self.selected_thumbnails.clear()
-        
-        # Cancel any pending thumbnail loads
+        # Cancel any pending thumbnail loading tasks
         self.thumbnail_loader.cancel_pending()
         
-        # Remove all thumbnails from the grid
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # Clear thumbnail dictionary
+        self.thumbnails = {}
         
-        # Clear thumbnail references
-        self.thumbnails.clear()
+        # Clear selected thumbnails
+        self.selected_thumbnails.clear()
         
-        # Clear thumbnail cache if we have a lot of thumbnails
+        # Clear the grid layout
+        if self.grid_layout:
+            # Remove all widgets from the grid
+            while self.grid_layout.count():
+                item = self.grid_layout.takeAt(0)
+                if item and item.widget():
+                    widget = item.widget()
+                    widget.setParent(None)
+                    widget.deleteLater()
+        
+        # Update header
+        self.header_label.setText("No images to display")
+        
+        # Emit selection signal with no selection
+        self.thumbnail_selected.emit(-1)
         # This helps prevent memory leaks when browsing large folders
         if len(self.thumbnails) > 100:
             self.thumbnail_loader.clear_cache()
+    
+
     
     def on_thumbnail_clicked(self, image_id):
         """Handle thumbnail click.
@@ -1308,6 +1326,22 @@ class ThumbnailBrowser(QWidget):
         """
         super().resizeEvent(event)
         
+        # Prevent excessive refreshes during continuous resize events
+        if not hasattr(self, '_resize_timer'):
+            from PyQt6.QtCore import QTimer
+            self._resize_timer = QTimer()
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.timeout.connect(self._delayed_resize_refresh)
+        
+        # Restart timer to prevent multiple refreshes during continuous resizing
+        self._resize_timer.start(200)  # 200ms delay before refreshing
+    
+    def _delayed_resize_refresh(self):
+        """Perform a refresh after resize events have settled."""
+        # Cancel any pending thumbnail loads before refreshing
+        if hasattr(self, 'thumbnail_loader'):
+            self.thumbnail_loader.cancel_pending()
+            
         # Refresh layout if we have thumbnails
         if self.thumbnails:
             self.refresh()

@@ -137,7 +137,6 @@ class MetadataPanel(QWidget):
         # Get image info from database
         image_info = self.db_manager.get_image_by_id(image_id)
         if not image_info:
-            logger.warning(f"No image found with ID: {image_id}")
             self.clear_metadata()
             return
         

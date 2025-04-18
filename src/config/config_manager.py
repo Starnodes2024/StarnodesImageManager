@@ -120,11 +120,6 @@ class ConfigManager:
                 "quality": 85,
                 "path": thumbnail_dir  # Use the correctly determined path
             },
-            "ai": {
-                "model_path": os.path.join(base_dir, "model"),
-                "device": "auto",  # Options: auto, cpu, cuda
-                "batch_size": 1
-            },
             "memory": {
                 "max_pool_size": 100 * 1024 * 1024,  # 100MB default memory pool size
                 "enable_memory_pool": True,          # Enable memory pooling

@@ -1,4 +1,4 @@
-# STARNODES Image Manager v0.9.7
+# STARNODES Image Manager v1.0.0
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ STARNODES Image Manager is a Windows application that helps you organize, search
 - **Dimension Presets**: Quickly find images matching standard resolutions (HD, 4K, etc.)
 - **Multiple Themes**: Choose from 12 different visual styles
 
-## Known Bugs in 0.9.7
+## Known Bugs in 1.0.0
 -when importing a database from a backup merge isn´t working at the moment. please use option: remove
 
 ## Getting Started

@@ -13,13 +13,14 @@ from PyQt6.QtWidgets import (
     QPushButton, QFileDialog, QGroupBox, QFormLayout,
     QMessageBox, QDialogButtonBox, QApplication
 )
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from src.config.theme_manager import ThemeManager
 
 logger = logging.getLogger("StarImageBrowse.ui.settings_dialog")
 
 class SettingsDialog(QDialog):
     """Dialog for configuring application settings."""
+    theme_changed = pyqtSignal(str)
     
     def __init__(self, config_manager, theme_manager=None, parent=None):
         """Initialize the settings dialog.
@@ -159,6 +160,26 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(thumb_group)
         
+        # Preview Settings
+        preview_group = QGroupBox("Hover Preview Settings")
+        preview_layout = QFormLayout(preview_group)
+        
+        # Preview size
+        self.preview_size_spin = QSpinBox()
+        self.preview_size_spin.setRange(300, 1500)
+        self.preview_size_spin.setSingleStep(50)
+        self.preview_size_spin.setSuffix(" px")
+        preview_layout.addRow("Max preview size:", self.preview_size_spin)
+        
+        # Preview delay
+        self.preview_delay_spin = QSpinBox()
+        self.preview_delay_spin.setRange(100, 1000)
+        self.preview_delay_spin.setSingleStep(50)
+        self.preview_delay_spin.setSuffix(" ms")
+        preview_layout.addRow("Hover delay:", self.preview_delay_spin)
+        
+        layout.addWidget(preview_group)
+        
         # Add stretch
         layout.addStretch(1)
         
@@ -265,61 +286,40 @@ class SettingsDialog(QDialog):
     def load_settings(self):
         """Load settings from configuration manager into UI."""
         # General tab
-        if self.theme_manager:
-            # Get theme ID from config
-            theme_id = self.config_manager.get("app", "theme", "light")
-            
-            # Try to find the theme by ID in the combo box data
-            index = -1
-            for i in range(self.theme_combo.count()):
-                if self.theme_combo.itemData(i) == theme_id:
-                    index = i
-                    break
-                    
-            # If not found by ID, try by name
-            if index < 0:
-                for i in range(self.theme_combo.count()):
-                    if self.theme_combo.itemText(i).lower() == theme_id:
-                        index = i
-                        break
-                        
-            # Set the current index if found
-            if index >= 0:
-                self.theme_combo.setCurrentIndex(index)
-            else:
-                # Default to System
-                self.theme_combo.setCurrentIndex(0)
+        watch_folders = self.config_manager.get("monitoring", "watch_folders", True)
+        self.watch_folders_check.setChecked(watch_folders)
+        
+        bg_scanning = self.config_manager.get("monitoring", "background_scanning", True)
+        self.background_scanning_check.setChecked(bg_scanning)
+        
+        scan_interval = self.config_manager.get("monitoring", "scan_interval", 300)
+        self.scan_interval_spin.setValue(scan_interval)
+        
+        # Load theme setting
+        theme = self.config_manager.get("ui", "theme", "System")
+        theme_index = self.theme_combo.findText(theme)
+        if theme_index >= 0:
+            self.theme_combo.setCurrentIndex(theme_index)
         else:
-            # Fallback to simple theme selection
-            theme = self.config_manager.get("app", "theme", "system").lower()
-            self.theme_combo.setCurrentText(theme.capitalize())
+            # Look for theme by ID in data
+            for i in range(self.theme_combo.count()):
+                if self.theme_combo.itemData(i) == theme:
+                    self.theme_combo.setCurrentIndex(i)
+                    break
         
-        # Description setting removed due to UI flickering issues
+        # Load thumbnail settings
+        thumb_size = self.config_manager.get("thumbnails", "size", 200)
+        self.thumbnail_size_spin.setValue(thumb_size)
         
-        self.watch_folders_check.setChecked(
-            self.config_manager.get("monitor", "watch_folders", True)
-        )
+        quality = self.config_manager.get("thumbnails", "quality", 85)
+        self.thumbnail_quality_spin.setValue(quality)
         
-        self.scan_interval_spin.setValue(
-            self.config_manager.get("monitor", "scan_interval_minutes", 30)
-        )
+        # Load preview settings
+        preview_size = self.config_manager.get("thumbnails", "preview_size", 700)
+        self.preview_size_spin.setValue(preview_size)
         
-        # Load background scanning settings
-        self.background_scanning_check.setChecked(
-            self.config_manager.get("scanning", "enable_background_scanning", False)
-        )
-        self.background_interval_spin.setValue(
-            self.config_manager.get("scanning", "background_interval_minutes", 30)
-        )
-        
-        # Thumbnails tab
-        self.thumbnail_size_spin.setValue(
-            self.config_manager.get("thumbnails", "size", 200)
-        )
-        
-        self.thumbnail_quality_spin.setValue(
-            self.config_manager.get("thumbnails", "quality", 85)
-        )
+        preview_delay = self.config_manager.get("thumbnails", "preview_delay", 300)
+        self.preview_delay_spin.setValue(preview_delay)
         
         # AI tab - Ollama settings
         self.ollama_url_edit.setText(
@@ -355,37 +355,34 @@ class SettingsDialog(QDialog):
     
     def save_settings(self):
         """Save settings from UI to configuration manager."""
-        # General tab
-        if self.theme_manager:
-            # Get theme ID from combo box
-            current_index = self.theme_combo.currentIndex()
-            if current_index > 0:  # Skip 'System' option
-                theme_id = self.theme_combo.itemData(current_index)
-                if theme_id:
-                    self.config_manager.set("app", "theme", theme_id)
-                    # Apply the theme immediately
-                    self.theme_manager.apply_theme(theme_id)
-                else:
-                    # Fallback to using the display name as ID
-                    theme_name = self.theme_combo.currentText().lower()
-                    self.config_manager.set("app", "theme", theme_name)
-            else:
-                # System theme selected
-                self.config_manager.set("app", "theme", "system")
+        # Save general settings
+        self.config_manager.set("monitoring", "watch_folders", self.watch_folders_check.isChecked())
+        self.config_manager.set("monitoring", "background_scanning", self.background_scanning_check.isChecked())
+        self.config_manager.set("monitoring", "scan_interval", self.scan_interval_spin.value())
+        
+        # Save theme setting
+        theme_index = self.theme_combo.currentIndex()
+        theme_data = self.theme_combo.itemData(theme_index)
+        if theme_data:
+            self.config_manager.set("ui", "theme", theme_data)
+            self.theme_changed.emit(theme_data)
         else:
-            # Fallback to simple theme selection
-            self.config_manager.set("app", "theme", self.theme_combo.currentText().lower())
-        # Description setting removed due to UI flickering issues
-        self.config_manager.set("monitor", "watch_folders", self.watch_folders_check.isChecked())
-        self.config_manager.set("monitor", "scan_interval_minutes", self.scan_interval_spin.value())
+            theme = self.theme_combo.currentText()
+            self.config_manager.set("ui", "theme", theme)
+            self.theme_changed.emit(theme)
         
-        # Save background scanning settings
-        self.config_manager.set("scanning", "enable_background_scanning", self.background_scanning_check.isChecked())
-        self.config_manager.set("scanning", "background_interval_minutes", self.background_interval_spin.value())
-        
-        # Thumbnails tab
+        # Save thumbnail settings
         self.config_manager.set("thumbnails", "size", self.thumbnail_size_spin.value())
         self.config_manager.set("thumbnails", "quality", self.thumbnail_quality_spin.value())
+        
+        # Save preview settings
+        self.config_manager.set("thumbnails", "preview_size", self.preview_size_spin.value())
+        self.config_manager.set("thumbnails", "preview_delay", self.preview_delay_spin.value())
+        
+        # Apply preview settings to ThumbnailWidget class
+        from .thumbnail_widget import ThumbnailWidget
+        ThumbnailWidget.set_preview_size(self.preview_size_spin.value())
+        ThumbnailWidget.set_hover_delay(self.preview_delay_spin.value())
         
         # AI tab - Ollama settings
         self.config_manager.set("ollama", "server_url", self.ollama_url_edit.text())

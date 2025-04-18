@@ -12,7 +12,10 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QLabel, QSizePolicy, QApplication
 )
 from PyQt6.QtGui import QPixmap, QImage
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+
+# Import the hover preview widget
+from .hover_preview_widget import HoverPreviewWidget
 
 logger = logging.getLogger("StarImageBrowse.ui.thumbnail_widget")
 
@@ -22,6 +25,12 @@ class ThumbnailWidget(QFrame):
     clicked = pyqtSignal(int)  # Signal emitted when thumbnail is clicked (image_id)
     double_clicked = pyqtSignal(int, str)  # Signal emitted when thumbnail is double-clicked (image_id, path)
     context_menu_requested = pyqtSignal(int, object)  # Signal emitted when context menu is requested (image_id, QPoint)
+    
+    # Shared preview widget for all thumbnails
+    _hover_preview = None
+    _hover_timer = None
+    _hover_delay = 300  # milliseconds
+    _max_preview_size = 700  # Default max preview size
     
     def __init__(self, image_id, thumbnail_path, filename, description=None, original_path=None, width=None, height=None, parent=None):
         """Initialize the thumbnail widget.
@@ -45,6 +54,8 @@ class ThumbnailWidget(QFrame):
         self.original_path = original_path
         self.selected = False
         self.pixmap = None
+        self._deleted = False
+        self._is_hovering = False
         
         # Set image dimensions if provided (from database)
         if width is not None and height is not None:
@@ -52,7 +63,26 @@ class ThumbnailWidget(QFrame):
         else:
             self.image_size = None
         
+        # Initialize preview if this is the first thumbnail
+        if ThumbnailWidget._hover_preview is None:
+            ThumbnailWidget._hover_preview = HoverPreviewWidget()
+            
+        # Initialize hover timer if this is the first thumbnail
+        if ThumbnailWidget._hover_timer is None:
+            ThumbnailWidget._hover_timer = QTimer()
+            ThumbnailWidget._hover_timer.setSingleShot(True)
+            
+        # Enable mouse tracking for hover events
+        self.setMouseTracking(True)
+        
         self.setup_ui()
+    
+    def __del__(self):
+        """Clean up resources when the widget is deleted."""
+        self._deleted = True
+        # Note: we don't attempt to disconnect signals in the destructor
+        # as Qt will handle this automatically and attempts to do so
+        # can lead to issues when the Python interpreter is shutting down
     
     def setup_ui(self):
         """Set up the thumbnail widget UI."""
@@ -62,17 +92,18 @@ class ThumbnailWidget(QFrame):
         self.setLineWidth(1)
         
         # Fixed size
-        self.setFixedSize(220, 300)  # Increased height to accommodate description
+        self.setFixedSize(220, 250)  # Reduced height to minimize space between elements
         
         # Main layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
         
         # Thumbnail image
         self.thumbnail_label = QLabel()
         self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail_label.setMinimumSize(200, 200)
-        self.thumbnail_label.setMaximumSize(200, 200)
+        # self.thumbnail_label.setMaximumSize(200, 200)
         
         # Load thumbnail image
         self.load_thumbnail()
@@ -80,15 +111,17 @@ class ThumbnailWidget(QFrame):
         layout.addWidget(self.thumbnail_label)
         
         # Filename label
-        self.filename_label = QLabel(self.filename)
+        self.filename_label = QLabel(self.filename.strip())
         self.filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.filename_label.setWordWrap(True)
-        self.filename_label.setMaximumHeight(40)
+        self.filename_label.setWordWrap(False)
+        self.filename_label.setMaximumHeight(24)
+        self.filename_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.filename_label)
         
         # Image size label
         self.size_label = QLabel()
         self.size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.size_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         # Match the filename's styling
         
         # Set size text if available
@@ -136,12 +169,33 @@ class ThumbnailWidget(QFrame):
         Args:
             pixmap (QPixmap): The thumbnail pixmap to display, or None for error
         """
-        if pixmap and not pixmap.isNull():
+        # Safety check - ensure widget is still valid before proceeding
+        # First check if the widget is marked as deleted
+        if hasattr(self, '_deleted') and self._deleted:
+            return
+            
+        try:
+            # Check if widget is still visible and has necessary components
+            if not self.isVisible() or not hasattr(self, 'thumbnail_label'):
+                return
+                
             self.pixmap = pixmap
-            scaled_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            self.thumbnail_label.setPixmap(scaled_pixmap)
-        else:
-            self.thumbnail_label.setText("Error")
+            
+            if pixmap and not pixmap.isNull():
+                # Scale pixmap to fit in the thumbnail label
+                scaled_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.thumbnail_label.setPixmap(scaled_pixmap)
+            else:
+                # Use a default thumbnail or placeholder for missing images
+                self.thumbnail_label.setText("No image")
+        except RuntimeError:
+            # Widget was deleted between our check and the attempt to update it
+            pass
+        except Exception as e:
+            # Log other errors but don't crash
+            import logging
+            logger = logging.getLogger("StarImageBrowse.ui.thumbnail_widget")
+            logger.debug(f"Error setting thumbnail: {str(e)}")
     
     def set_selected(self, selected):
         """Set the selected state of the thumbnail.
@@ -254,6 +308,96 @@ class ThumbnailWidget(QFrame):
         
         if event.button() == Qt.MouseButton.LeftButton:
             self.double_clicked.emit(self.image_id, self.thumbnail_path)
+    
+    def enterEvent(self, event):
+        """Handle mouse enter event.
+        
+        Args:
+            event: Mouse event
+        """
+        super().enterEvent(event)
+        self._is_hovering = True
+        
+        # Start hover timer - safely disconnect any previous connections first
+        try:
+            # Only try to disconnect if there are connections
+            ThumbnailWidget._hover_timer.timeout.disconnect()
+        except (TypeError, RuntimeError):
+            # If disconnect fails, it's because there were no connections yet
+            pass
+            
+        # Connect and start the timer
+        ThumbnailWidget._hover_timer.timeout.connect(self.show_preview)
+        ThumbnailWidget._hover_timer.start(ThumbnailWidget._hover_delay)
+    
+    def leaveEvent(self, event):
+        """Handle mouse leave event.
+        
+        Args:
+            event: Mouse event
+        """
+        super().leaveEvent(event)
+        self._is_hovering = False
+        
+        # Stop hover timer and hide preview
+        ThumbnailWidget._hover_timer.stop()
+        if ThumbnailWidget._hover_preview and ThumbnailWidget._hover_preview.isVisible():
+            ThumbnailWidget._hover_preview.hide()
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move event.
+        
+        Args:
+            event: Mouse event
+        """
+        super().mouseMoveEvent(event)
+        
+        # Update preview position if it's visible
+        if self._is_hovering and ThumbnailWidget._hover_preview and ThumbnailWidget._hover_preview.isVisible():
+            global_pos = self.mapToGlobal(event.pos())
+            ThumbnailWidget._hover_preview.show_at(global_pos)
+    
+    def show_preview(self):
+        """Show the hover preview for this thumbnail."""
+        if not self._is_hovering or self._deleted:
+            return
+            
+        # Get the original image path
+        image_path = self.original_path
+        if not image_path or not os.path.exists(image_path):
+            # If no original path or file doesn't exist, fallback to thumbnail
+            image_path = self.thumbnail_path
+            
+        if image_path and os.path.exists(image_path):
+            # Get the cursor position
+            cursor_pos = self.mapToGlobal(self.rect().center())
+            
+            # Load the image and show preview
+            if ThumbnailWidget._hover_preview.load_preview(image_path, ThumbnailWidget._max_preview_size):
+                ThumbnailWidget._hover_preview.show_at(cursor_pos)
+    
+    @classmethod
+    def set_preview_size(cls, size):
+        """Set the maximum preview size for all thumbnails.
+        
+        Args:
+            size (int): Maximum preview size in pixels
+        """
+        cls._max_preview_size = size
+        if cls._hover_preview:
+            # Update existing preview widget with new size
+            cls._hover_preview.max_preview_size = size
+    
+    @classmethod
+    def set_hover_delay(cls, delay):
+        """Set the hover delay for previews.
+        
+        Args:
+            delay (int): Hover delay in milliseconds
+        """
+        cls._hover_delay = delay
+    
+
     
     def on_context_menu(self, point):
         """Handle context menu request.

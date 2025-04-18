@@ -55,7 +55,31 @@ logger = logging.getLogger("STARNODESImageManager.ui")
 
 class MainWindow(QMainWindow):
     """Main application window."""
-    
+
+    def on_theme_changed(self, theme_id=None):
+        """Slot to handle theme changes and update the UI theme immediately."""
+        if theme_id is None:
+            theme_id = self.config_manager.get("ui", "theme", None)
+        # Set theme using theme manager
+        self.theme_manager.apply_theme(theme_id)
+        # Apply theme to all UI components
+        self.apply_theme_to_ui(theme_id)
+        # Update the hover preview widget if present
+        try:
+            from src.ui.thumbnail_widget import ThumbnailWidget
+            if hasattr(ThumbnailWidget, '_hover_preview') and ThumbnailWidget._hover_preview:
+                ThumbnailWidget._hover_preview.update_theme()
+        except Exception as e:
+            logger.error(f"Error updating hover preview widget theme: {e}")
+
+    def apply_theme_to_ui(self, theme_id=None):
+        """Apply the selected theme to UI components."""
+        if theme_id:
+            self.theme_manager.apply_theme(theme_id)
+        # Update all widgets that use the theme
+        # You may need to add further widget updates here as needed
+        # (Stylesheet is already set by ThemeManager.apply_theme())
+
     def __init__(self, db_manager):
         """Initialize the main window.
         
@@ -686,7 +710,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager V0.9.7")
+        self.setWindowTitle("STARNODES Image Manager V1.0.0")
         self.setMinimumSize(1024, 768)
         
         # Create menu bar if it doesn't exist
@@ -1510,6 +1534,8 @@ class MainWindow(QMainWindow):
     def on_settings(self):
         """Handle the Settings action."""
         settings_dialog = SettingsDialog(self.config_manager, self.theme_manager, self)
+        settings_dialog.theme_changed.connect(self.on_theme_changed)
+        theme_before = self.config_manager.get("ui", "theme", None)
         
         if settings_dialog.exec() == QDialog.DialogCode.Accepted:
             # Reload component settings
@@ -1527,6 +1553,12 @@ class MainWindow(QMainWindow):
             
             # Update background scanner settings
             self.update_background_scanner_settings()
+            
+            # Check if the theme was changed and update immediately
+            theme_after = self.config_manager.get("ui", "theme", None)
+            if theme_after != theme_before:
+                self.on_theme_changed(theme_after)
+
     
     def on_folder_selected(self, folder_id, folder_path):
         """Handle folder selection from the folder panel.
@@ -3934,8 +3966,8 @@ class MainWindow(QMainWindow):
         merge_option = QRadioButton("Merge with existing database (add new images and folders)")
         replace_option = QRadioButton("Replace existing database (this will remove all current data)")
         
-        # Set merge as default
-        merge_option.setChecked(True)
+        # Set replace as default
+        replace_option.setChecked(True)
         
         db_layout.addWidget(merge_option)
         db_layout.addWidget(replace_option)
@@ -4430,6 +4462,52 @@ class MainWindow(QMainWindow):
                                         logger.error(f"Fallback extraction also failed for {file}: {e2}")
                         
                         thumbnails_imported = True
+                        
+                        # Update the database to link images to their thumbnails
+                        try:
+                            progress_dialog.update_progress(97, 100, "Updating thumbnail paths in database...")
+                            QApplication.processEvents()
+                            
+                            # For both replace and merge modes, we need to update the thumbnail paths
+                            # Get a list of all images in the database
+                            all_images = []
+                            for folder in self.db_manager.get_folders():
+                                images = self.db_manager.get_images_for_folder(folder['folder_id'])
+                                all_images.extend(images)
+                            
+                            # Connect to database directly for bulk update
+                            conn = sqlite3.connect(self.db_manager.db_path)
+                            cursor = conn.cursor()
+                            
+                            update_count = 0
+                            for image in all_images:
+                                # Only process images that don't have a thumbnail yet
+                                if not image.get('thumbnail_path'):
+                                    # Use the filename hash as the thumbnail filename
+                                    filename = image['filename']
+                                    # Get just the filename without path
+                                    base_filename = os.path.basename(filename)
+                                    # Calculate hash for the filename to match the thumbnail naming convention
+                                    import hashlib
+                                    filename_hash = hashlib.md5(base_filename.encode()).hexdigest()
+                                    thumbnail_filename = f"{filename_hash}.jpg"
+                                    
+                                    # Check if this thumbnail exists in the extracted files
+                                    thumbnail_path = os.path.join(thumbnails_dir, thumbnail_filename)
+                                    if os.path.exists(thumbnail_path):
+                                        # Update the database with the thumbnail path
+                                        cursor.execute(
+                                            "UPDATE images SET thumbnail_path = ? WHERE image_id = ?", 
+                                            (thumbnail_filename, image['image_id'])
+                                        )
+                                        update_count += 1
+                            
+                            conn.commit()
+                            conn.close()
+                            
+                            logger.info(f"Updated {update_count} thumbnail paths in database")
+                        except Exception as e:
+                            logger.error(f"Error updating thumbnail paths: {e}")
                     except Exception as e:
                         logger.error(f"Error importing thumbnails: {e}")
                 
@@ -4438,7 +4516,9 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 
                 # Optimize database after import
-                self.db_manager.optimize_database()
+                from src.database.db_optimizer import DatabaseOptimizer
+                optimizer = DatabaseOptimizer(self.db_manager)
+                optimizer.optimize_database()
                 
                 # Upgrade database schema if needed
                 from src.database.db_upgrade import upgrade_database_schema

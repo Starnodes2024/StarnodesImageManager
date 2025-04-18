@@ -44,13 +44,13 @@ class ThemeManager(QObject):
             bool: True if initialization was successful, False otherwise
         """
         try:
-            # Set designs directory
+            # Set designs directory (now inside data folder)
             if app_dir:
-                self.designs_dir = os.path.join(app_dir, "designs")
+                self.designs_dir = os.path.join(app_dir, "data", "designs")
             else:
                 # Try to find designs folder relative to current file
                 current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                self.designs_dir = os.path.join(current_dir, "designs")
+                self.designs_dir = os.path.join(current_dir, "data", "designs")
             
             # Create designs directory if it doesn't exist
             os.makedirs(self.designs_dir, exist_ok=True)
@@ -436,7 +436,7 @@ class ThemeManager(QObject):
                     }}
                     
                     QCheckBox::indicator:checked {{
-                        image: url(designs/icons/checkmark.png);
+                        image: url(data/designs/icons/checkmark.png);
                     }}
                     
                     QRadioButton::indicator:checked {{

@@ -239,8 +239,21 @@ class LazyThumbnailLoader(QObject):
         if pixmap and not pixmap.isNull():
             self.image_cache.set_thumbnail(image_id, pixmap)
         
-        # Call the callback
-        callback(pixmap)
+        # Check if it's safe to call the callback
+        try:
+            from PyQt6.QtWidgets import QWidget
+            if hasattr(callback, '__self__') and isinstance(callback.__self__, QWidget):
+                # If callback belongs to a widget, check if it's still valid
+                if not callback.__self__.isVisible() or not callback.__self__.parent():
+                    logger.debug(f"Skipping callback for thumbnail {image_id} - widget no longer valid")
+                    return
+            # Call the callback
+            callback(pixmap)
+        except RuntimeError as e:
+            # This will catch the 'C++ object deleted' error
+            logger.debug(f"Skipping callback for thumbnail {image_id} - {str(e)}")
+        except Exception as e:
+            logger.warning(f"Error in thumbnail callback for {image_id}: {str(e)}")
     
     def on_thumbnail_error(self, image_id, error, callback):
         """Handle an error loading a thumbnail.
@@ -256,8 +269,21 @@ class LazyThumbnailLoader(QObject):
         # Log the error
         logger.warning(f"Failed to load thumbnail {image_id}: {error}")
         
-        # Call the callback with None
-        callback(None)
+        # Check if it's safe to call the callback
+        try:
+            from PyQt6.QtWidgets import QWidget
+            if hasattr(callback, '__self__') and isinstance(callback.__self__, QWidget):
+                # If callback belongs to a widget, check if it's still valid
+                if not callback.__self__.isVisible() or not callback.__self__.parent():
+                    logger.debug(f"Skipping error callback for thumbnail {image_id} - widget no longer valid")
+                    return
+            # Call the callback with None
+            callback(None)
+        except RuntimeError as e:
+            # This will catch the 'C++ object deleted' error
+            logger.debug(f"Skipping error callback for thumbnail {image_id} - {str(e)}")
+        except Exception as e:
+            logger.warning(f"Error in thumbnail error callback for {image_id}: {str(e)}")
     
     def clear_cache(self):
         """Clear the thumbnail cache."""

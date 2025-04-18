@@ -10,6 +10,7 @@ STARNODES Image Manager is a Windows application that helps you organize, search
 
 ### Key Features
 
+- **AI-Powered Descriptions**: Import image folders and generate automatic descriptions using ollama vision models
 - **AI-Powered Search**: Find images using natural language descriptions
 - **Smart Organization**: Create catalogs to group images by content, regardless of folder location
 - **Batch Operations**: Select multiple images for renaming, copying, or exporting
@@ -17,8 +18,6 @@ STARNODES Image Manager is a Windows application that helps you organize, search
 - **Dimension Presets**: Quickly find images matching standard resolutions (HD, 4K, etc.)
 - **Multiple Themes**: Choose from 12 different visual styles
 
-## Known Bugs in 1.0.0
--when importing a database from a backup merge isn´t working at the moment. please use option: remove
 
 ## Getting Started
 
@@ -31,9 +30,9 @@ STARNODES Image Manager is a Windows application that helps you organize, search
 ### Developer Version
 
 If you prefer to run from source code:
-
-1. **Setup**: Run `python setup_env.py` to create the environment and install dependencies
-2. **Launch**: Start with `python main.py` or use `StartApp.bat`
+1. git clone https://github.com/Starnodes2024/StarnodesImageManager
+2. **Setup**: Run `python setup_env.py` to create the environment and install dependencies
+3. **Launch**: Start with `python main.py` or use `StartApp.bat`
 
 ### First Steps
 
@@ -45,17 +44,7 @@ If you prefer to run from source code:
 
 See the full documentation in HELP.md for detailed instructions.
 
-```powershell
-# Clone the repository (or download and extract the ZIP)
-git clone https://github.com/Starnodes2024/STARNODES-Image-Manager.git
-cd STARNODES-Image-Manager
 
-# Run the setup script to create virtual environment and install dependencies
-python setup_env.py
-
-# Start the application
-python main.py
-```
 
 ## Requirements
 

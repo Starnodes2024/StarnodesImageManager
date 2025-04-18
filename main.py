@@ -134,6 +134,8 @@ def main():
         portable_dirs = [
             os.path.join(exe_dir, "data"),
             os.path.join(exe_dir, "data", "thumbnails"),
+            os.path.join(exe_dir, "data", "designs"),
+            os.path.join(exe_dir, "data", "designs", "icons"),
             os.path.join(exe_dir, "config"),
             os.path.join(exe_dir, "data", "logs")
         ]
@@ -141,6 +143,42 @@ def main():
         for directory in portable_dirs:
             os.makedirs(directory, exist_ok=True)
             logger.info(f"Ensured portable directory exists: {directory}")
+            
+        # Explicitly copy design files from PyInstaller's temporary directory to our portable location
+        # This ensures themes and icons are available in the portable app
+        if hasattr(sys, '_MEIPASS'):
+            # Source directories from PyInstaller temp directory
+            source_designs_dir = os.path.join(sys._MEIPASS, "data", "designs")
+            dest_designs_dir = os.path.join(exe_dir, "data", "designs")
+            
+            # Check if source designs directory exists in PyInstaller temp dir
+            if os.path.exists(source_designs_dir):
+                logger.info(f"Found designs in PyInstaller temp dir: {source_designs_dir}")
+                
+                # Copy design JSON files
+                for design_file in [f for f in os.listdir(source_designs_dir) if f.endswith('.json')]:
+                    source_file = os.path.join(source_designs_dir, design_file)
+                    dest_file = os.path.join(dest_designs_dir, design_file)
+                    if not os.path.exists(dest_file):
+                        import shutil
+                        shutil.copy2(source_file, dest_file)
+                        logger.info(f"Copied design file to portable location: {dest_file}")
+                
+                # Copy icons
+                source_icons_dir = os.path.join(source_designs_dir, "icons")
+                dest_icons_dir = os.path.join(dest_designs_dir, "icons")
+                
+                if os.path.exists(source_icons_dir):
+                    os.makedirs(dest_icons_dir, exist_ok=True)
+                    for icon_file in os.listdir(source_icons_dir):
+                        source_icon = os.path.join(source_icons_dir, icon_file)
+                        dest_icon = os.path.join(dest_icons_dir, icon_file)
+                        if not os.path.exists(dest_icon):
+                            import shutil
+                            shutil.copy2(source_icon, dest_icon)
+                            logger.info(f"Copied icon file to portable location: {dest_icon}")
+            else:
+                logger.warning(f"Could not find designs in PyInstaller temp dir. Expected: {source_designs_dir}")
     
     # Activate virtual environment (only necessary when running as script)
     if not activate_virtual_environment():
@@ -389,7 +427,7 @@ def main():
         try:
             # Create the main window
             main_window = MainWindow(db_manager)
-            main_window.setWindowTitle("STARNODES Image Manager V0.9.7")
+            main_window.setWindowTitle("STARNODES Image Manager V1.0.0")
             
             # Set up key position and size
             desktop = app.primaryScreen().availableGeometry()

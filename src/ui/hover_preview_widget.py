@@ -17,13 +17,17 @@ logger = logging.getLogger("StarImageBrowse.ui.hover_preview_widget")
 class HoverPreviewWidget(QFrame):
     """Widget for displaying a larger preview on hover."""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, language_manager=None):
         """Initialize the hover preview widget.
         
         Args:
             parent (QWidget, optional): Parent widget
+            language_manager: Language manager instance for translations
         """
         super().__init__(parent)
+        
+        # Store language manager
+        self.language_manager = language_manager
         
         # Set up UI
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
@@ -77,6 +81,28 @@ class HoverPreviewWidget(QFrame):
         
         # Set frame style directly on the widget (no selector) for maximum reliability
         self.setStyleSheet(f"background-color: white; border: 4px solid {border_color}; border-radius: 0px;")
+        
+    def set_language_manager(self, language_manager):
+        """Set the language manager for translations.
+        
+        Args:
+            language_manager: Language manager instance
+        """
+        self.language_manager = language_manager
+    
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the hover_preview section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('hover_preview', key, default)
+        return default
     
     def load_preview(self, image_path, max_size=None):
         """Load an image preview at the specified size.
@@ -92,14 +118,14 @@ class HoverPreviewWidget(QFrame):
         try:
             if not os.path.exists(image_path):
                 logger.warning(f"Image not found for preview: {image_path}")
-                self.preview_label.setText("Image not found")
+                self.preview_label.setText(self.get_translation('image_not_found', 'Image not found'))
                 return False
             
             # Load image
             pixmap = QPixmap(image_path)
             if pixmap.isNull():
                 logger.warning(f"Failed to load image for preview: {image_path}")
-                self.preview_label.setText("Failed to load image")
+                self.preview_label.setText(self.get_translation('failed_to_load', 'Failed to load image'))
                 return False
             
             # Scale maintaining aspect ratio
@@ -122,7 +148,7 @@ class HoverPreviewWidget(QFrame):
             
         except Exception as e:
             logger.error(f"Error loading preview for {image_path}: {str(e)}")
-            self.preview_label.setText("Error loading preview")
+            self.preview_label.setText(self.get_translation('error_loading', 'Error loading preview'))
             return False
     
     def show_at(self, global_pos, desktop_rect=None):

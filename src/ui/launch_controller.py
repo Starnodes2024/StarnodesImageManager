@@ -69,7 +69,7 @@ class LaunchController:
             self.config_manager.set("ai", "process_all_images", False)
             
             # UI settings
-            self.config_manager.set("app", "theme", "system")
+            self.config_manager.set("ui", "theme", "system")
             self.config_manager.set("thumbnails", "size", 200)  # Medium size
             self.config_manager.set("ui", "show_descriptions", True)
             self.config_manager.set("monitor", "watch_folders", True)

@@ -23,15 +23,17 @@ class NotificationType(Enum):
 class NotificationManager:
     """Manager for application notifications and error handling."""
     
-    def __init__(self, status_bar=None, parent_widget=None):
+    def __init__(self, status_bar=None, parent_widget=None, language_manager=None):
         """Initialize the notification manager.
         
         Args:
             status_bar (QStatusBar, optional): Status bar for displaying messages
             parent_widget (QWidget, optional): Parent widget for message boxes
+            language_manager: Language manager instance for translations
         """
         self.status_bar = status_bar
         self.parent_widget = parent_widget
+        self.language_manager = language_manager
         self.status_message_timer = QTimer()
         self.status_message_timer.setSingleShot(True)
         self.status_message_timer.timeout.connect(self.clear_status)
@@ -51,6 +53,28 @@ class NotificationManager:
             parent_widget (QWidget): Parent widget
         """
         self.parent_widget = parent_widget
+        
+    def set_language_manager(self, language_manager):
+        """Set the language manager for translations.
+        
+        Args:
+            language_manager: Language manager instance
+        """
+        self.language_manager = language_manager
+        
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the notifications section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('notifications', key, default)
+        return default
     
     def show_status_message(self, message, message_type=NotificationType.INFO, timeout=5000):
         """Show a message in the status bar.
@@ -155,7 +179,10 @@ class NotificationManager:
             str: Error message generated for the exception
         """
         # Get exception details
-        error_message = f"Error during {operation_name}: {str(exception)}"
+        error_message = self.get_translation(
+            'error_during_operation',
+            f"Error during {operation_name}: {str(exception)}"
+        ).format(operation=operation_name, error=str(exception))
         error_details = traceback.format_exc()
         
         # Log the error
@@ -168,8 +195,13 @@ class NotificationManager:
         
         # Show message box if requested
         if show_message_box and self.parent_widget:
+            title = self.get_translation(
+                'operation_failed',
+                f"{operation_name} Failed"
+            ).format(operation=operation_name)
+            
             self.show_message_box(
-                f"{operation_name} Failed",
+                title,
                 error_message,
                 NotificationType.ERROR,
                 error_details
@@ -199,6 +231,15 @@ class NotificationManager:
         msg_box.setIcon(QMessageBox.Icon.Question)
         msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Translate buttons if language manager is available
+        if hasattr(self, 'language_manager') and self.language_manager:
+            yes_button = msg_box.button(QMessageBox.StandardButton.Yes)
+            no_button = msg_box.button(QMessageBox.StandardButton.No)
+            if yes_button:
+                yes_button.setText(self.get_translation('yes_button', 'Yes'))
+            if no_button:
+                no_button.setText(self.get_translation('no_button', 'No'))
         
         # Add details if provided
         if details:

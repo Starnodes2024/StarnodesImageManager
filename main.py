@@ -11,6 +11,8 @@ import os
 import sys
 import logging
 import time
+import atexit
+import gc
 from datetime import datetime
 import threading
 
@@ -136,6 +138,7 @@ def main():
             os.path.join(exe_dir, "data", "thumbnails"),
             os.path.join(exe_dir, "data", "designs"),
             os.path.join(exe_dir, "data", "designs", "icons"),
+            os.path.join(exe_dir, "data", "lang"),
             os.path.join(exe_dir, "config"),
             os.path.join(exe_dir, "data", "logs")
         ]
@@ -179,6 +182,25 @@ def main():
                             logger.info(f"Copied icon file to portable location: {dest_icon}")
             else:
                 logger.warning(f"Could not find designs in PyInstaller temp dir. Expected: {source_designs_dir}")
+                
+            # Copy language files from PyInstaller temporary directory to portable location
+            source_lang_dir = os.path.join(sys._MEIPASS, "data", "lang")
+            dest_lang_dir = os.path.join(exe_dir, "data", "lang")
+            
+            # Check if source language directory exists in PyInstaller temp dir
+            if os.path.exists(source_lang_dir):
+                logger.info(f"Found language files in PyInstaller temp dir: {source_lang_dir}")
+                
+                # Copy language JSON files
+                import shutil
+                for lang_file in [f for f in os.listdir(source_lang_dir) if f.endswith('.json')]:
+                    source_file = os.path.join(source_lang_dir, lang_file)
+                    dest_file = os.path.join(dest_lang_dir, lang_file)
+                    if not os.path.exists(dest_file):
+                        shutil.copy2(source_file, dest_file)
+                        logger.info(f"Copied language file to portable location: {dest_file}")
+            else:
+                logger.warning(f"Could not find language files in PyInstaller temp dir. Expected: {source_lang_dir}")
     
     # Activate virtual environment (only necessary when running as script)
     if not activate_virtual_environment():
@@ -190,7 +212,8 @@ def main():
     
     # Import required modules (must be done after activating virtual environment)
     try:
-        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
+        from PyQt6.QtGui import QPixmap
         from PyQt6.QtCore import QTimer, Qt
         from src.ui.main_window import MainWindow
         from src.database.db_manager import DatabaseManager
@@ -204,6 +227,19 @@ def main():
     
     # Load configuration
     config_manager = ConfigManager()
+
+    # --- LanguageManager initialization ---
+    # Read language code from config, default to 'en_GB' if not set
+    language_code = config_manager.get('ui', 'language', None)
+    if not language_code:
+        language_code = 'en_GB'
+        config_manager.set('ui', 'language', 'en_GB')
+        config_manager.save()
+    from src.config.language_manager import LanguageManager
+    language_manager = LanguageManager(config_manager)
+    # Make sure to load the correct language
+    language_manager.load_language(language_code)
+    app_refs['language_manager'] = language_manager
     
     # Initialize memory management and Phase 4 optimizations
     try:
@@ -327,7 +363,15 @@ def main():
     app.setApplicationName("STARNODES Image Manager")
     app.setOrganizationName("StarKeeper")
     app.setOrganizationDomain("starkeeper.example.com")
-    
+
+    # --- Splash Screen (3 seconds) ---
+    splash_path = os.path.join(current_dir, "splash.png")
+    splash_pix = QPixmap(splash_path)
+    splash = QSplashScreen(splash_pix)
+    splash.show()
+    app.processEvents()  # Ensure splash is visible
+    app.processEvents()  # Ensure splash is visible
+
     # Store the reference
     app_refs['app'] = app
     
@@ -427,7 +471,7 @@ def main():
         try:
             # Create the main window
             main_window = MainWindow(db_manager)
-            main_window.setWindowTitle("STARNODES Image Manager V1.0.0")
+            main_window.setWindowTitle("STARNODES Image Manager V1.1.0")
             
             # Set up key position and size
             desktop = app.primaryScreen().availableGeometry()
@@ -494,6 +538,7 @@ def main():
                     os.path.join(data_dir, "cache"),
                     os.path.join(data_dir, "exports"),
                     os.path.join(data_dir, "logs"),
+                    os.path.join(data_dir, "lang"),  # Add language directory
                     os.path.join(exe_dir, "config")  # Create config directory next to the executable
                 ]
                 
@@ -557,7 +602,7 @@ def main():
                 # Only create the main window if it doesn't already exist
                 if not self.main_window:
                     logger.info("Creating new main window instance")
-                    self.main_window = MainWindow(db_manager)
+                    self.main_window = MainWindow(db_manager, language_manager=app_refs.get('language_manager'))
                     
                     # Integrate format optimizer with thumbnail generator
                     try:
@@ -651,13 +696,21 @@ def main():
                 )
     
     # Create and start the application
+
+    # Create and start the application
     main_app = MainApplication()
     app_refs["main_app"] = main_app  # Keep a reference
-    main_app.start()
-    
+
+    # Show main window after splash screen delay
+    def show_main_after_splash():
+        splash.close()
+        main_app.start()
+
+    QTimer.singleShot(3000, show_main_after_splash)  # 3 seconds
+
     # Log that we're starting the event loop
     logger.info("Starting application event loop")
-    
+
     # Start the event loop and return its result
     exit_code = app.exec()
     
@@ -672,6 +725,10 @@ def main():
     
     # Log application exit
     logger.info(f"Application exiting with code {exit_code}")
+    
+    # Ensure all database connections are closed
+    cleanup_resources()
+    
     return exit_code
 
 def fix_imported_database_thumbnails(db_manager, thumbnails_dir):
@@ -754,6 +811,84 @@ def fix_imported_database_thumbnails(db_manager, thumbnails_dir):
     except Exception as e:
         logger.error(f"Error fixing imported database thumbnails: {e}")
         return (0, 0, 1, 0)
+
+def cleanup_resources():
+    """Clean up all resources before application exit to prevent file locks.
+    This ensures all database connections are closed and log handlers are removed.
+    """
+    try:
+        print("Starting application cleanup to prevent file locks...")
+        
+        # Close any open database connections
+        db_manager = app_refs.get("db_manager")
+        if db_manager:
+            print("Closing primary database connection...")
+            try:
+                db_manager.disconnect()
+            except Exception as e:
+                print(f"Error closing primary database: {e}")
+        
+        # Force close any SQLite connections that might still be open
+        try:
+            import sqlite3
+            # Close all connections in SQLite's internal list
+            if hasattr(sqlite3, 'Connection') and hasattr(sqlite3.Connection, 'close'):
+                print("Forcing close of any lingering SQLite connections...")
+                for obj in gc.get_objects():
+                    if isinstance(obj, sqlite3.Connection):
+                        try:
+                            obj.close()
+                            print("Closed a lingering SQLite connection")
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"Error closing SQLite connections: {e}")
+            
+        # Close and remove all logging handlers to release log file locks
+        print("Closing and removing all logging handlers...")
+        for logger_name in logging.Logger.manager.loggerDict:
+            logger_obj = logging.getLogger(logger_name)
+            for handler in logger_obj.handlers[:]:
+                try:
+                    if isinstance(handler, logging.FileHandler):
+                        handler.flush()
+                        handler.close()
+                    logger_obj.removeHandler(handler)
+                except Exception:
+                    pass
+        
+        # Also close handlers on the root logger
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            try:
+                if isinstance(handler, logging.FileHandler):
+                    handler.flush()
+                    handler.close()
+                root_logger.removeHandler(handler)
+            except Exception:
+                pass
+        
+        # Close any Qt resources if they exist
+        if 'main_window' in app_refs:
+            try:
+                print("Closing main window resources...")
+                main_window = app_refs['main_window']
+                if hasattr(main_window, 'close'):
+                    main_window.close()
+            except Exception as e:
+                print(f"Error closing main window: {e}")
+        
+        # Force garbage collection to release any remaining references
+        import gc
+        print("Running garbage collection...")
+        gc.collect()
+        
+        print("Resource cleanup completed successfully")
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
+
+# Register the cleanup function to run at exit
+atexit.register(cleanup_resources)
 
 if __name__ == "__main__":
     try:

@@ -254,7 +254,7 @@ def handle_enhanced_search(main_window, params):
             
             # Update window title with search info
             if hasattr(main_window, 'setWindowTitle'):
-                base_title = "Star Image Browse"
+                base_title = "STARNODES Image Manager"
                 if criteria_parts:
                     search_title = f"{base_title} - Search Results: {criteria_text}"
                     main_window.setWindowTitle(search_title)

@@ -10,13 +10,14 @@ from .thumbnail_browser import ThumbnailBrowser
 
 logger = logging.getLogger("StarImageBrowse.ui.thumbnail_browser_factory")
 
-def create_thumbnail_browser(db_manager, config_manager, parent=None):
+def create_thumbnail_browser(db_manager, config_manager, parent=None, language_manager=None):
     """Create the appropriate thumbnail browser based on configuration settings.
     
     Args:
         db_manager: Database manager instance
         config_manager: Configuration manager instance
         parent: Parent widget
+        language_manager: Language manager instance for translations
         
     Returns:
         A thumbnail browser instance
@@ -30,4 +31,12 @@ def create_thumbnail_browser(db_manager, config_manager, parent=None):
     
     # Always return the standard thumbnail browser
     logger.info("Using standard thumbnail browser")
-    return ThumbnailBrowser(db_manager, parent)
+    # Create the thumbnail browser with language manager if provided
+    browser = ThumbnailBrowser(db_manager, parent)
+    
+    # Set language manager explicitly to ensure translations work
+    if language_manager:
+        browser.language_manager = language_manager
+        logger.info(f"Language manager set for thumbnail browser: {language_manager.current_language}")
+    
+    return browser

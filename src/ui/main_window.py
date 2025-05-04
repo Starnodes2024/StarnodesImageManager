@@ -42,6 +42,7 @@ from src.scanner.background_scanner import BackgroundScanner
 from src.config.config_manager import ConfigManager
 from src.database.db_optimization_utils import check_and_optimize_if_needed
 from src.config.theme_manager import ThemeManager
+from src.config.language_manager import LanguageManager
 from src.processing.batch_operations import get_batch_operations, BatchOperations
 from src.processing.task_manager import get_task_manager
 from src.processing.parallel_pipeline import get_pipeline
@@ -49,12 +50,20 @@ from src.memory.memory_utils import initialize_memory_management, get_memory_sta
 from src.database.performance_optimizer import DatabasePerformanceOptimizer
 from src.database.enhanced_search import EnhancedSearch
 from src.ui.main_window_search_integration import integrate_enhanced_search
+from src.ui.main_window_language import apply_language_to_main_window, on_language_changed
 from src.database.db_upgrade import upgrade_database_schema
 
 logger = logging.getLogger("STARNODESImageManager.ui")
 
 class MainWindow(QMainWindow):
     """Main application window."""
+    
+    def on_language_changed(self, language_code=None):
+        """Slot to handle language changes and update the UI language immediately."""
+        if language_code is None:
+            language_code = self.config_manager.get("ui", "language", "en")
+        # Update UI with new language
+        on_language_changed(self, language_code)
 
     def on_theme_changed(self, theme_id=None):
         """Slot to handle theme changes and update the UI theme immediately."""
@@ -80,11 +89,12 @@ class MainWindow(QMainWindow):
         # You may need to add further widget updates here as needed
         # (Stylesheet is already set by ThemeManager.apply_theme())
 
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, language_manager=None):
         """Initialize the main window.
         
         Args:
             db_manager: Database manager instance
+            language_manager: Optional LanguageManager instance to use
         """
         super().__init__()
         
@@ -102,6 +112,16 @@ class MainWindow(QMainWindow):
         
         # Initialize theme manager
         self.theme_manager = ThemeManager(config_manager=self.config_manager)
+        
+        # Initialize language manager (use provided or create new)
+        if language_manager is not None:
+            self.language_manager = language_manager
+        else:
+            from src.config.language_manager import LanguageManager
+            # Try to get language from config, default to 'en'
+            language_code = self.config_manager.get('ui', 'language', 'en')
+            self.language_manager = LanguageManager(language_code)
+        logger.debug(f"Language set to: {self.language_manager.current_language}")
         
         # Initialize notification manager
         self.notification_manager = NotificationManager(parent_widget=self)
@@ -132,6 +152,9 @@ class MainWindow(QMainWindow):
         # Initialize enhanced search after UI is visible
         QApplication.processEvents()
         self.initialize_enhanced_search()
+        
+        # Apply language translations
+        apply_language_to_main_window(self, self.language_manager)
         
         # Initialize database extensions and add "All Images" view functionality
         from src.database.db_operations_extension import extend_db_operations
@@ -277,6 +300,38 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error checking database optimization: {e}")
             # Non-critical, so continue
+            
+    def create_progress_dialog(self, title_key, description_key, parent=None, cancellable=True):
+        """Create a progress dialog with language support.
+        
+        Args:
+            title_key (str): Translation key for dialog title or default text
+            description_key (str): Translation key for description or default text
+            parent (QWidget, optional): Parent widget
+            cancellable (bool): Whether the operation can be cancelled
+            
+        Returns:
+            ProgressDialog: Configured progress dialog with language support
+        """
+        try:
+            # Translate title and description
+            translated_title = self.language_manager.translate('progress', title_key, title_key)
+            translated_description = self.language_manager.translate('progress', description_key, description_key)
+            
+            # Create dialog with language manager
+            dialog = ProgressDialog(
+                translated_title,
+                translated_description,
+                parent=parent or self,
+                cancellable=cancellable,
+                language_manager=self.language_manager
+            )
+            
+            return dialog
+        except Exception as e:
+            logger.error(f"Error creating progress dialog: {e}")
+            # Fallback to basic dialog without translations
+            return ProgressDialog(title_key, description_key, parent=parent or self, cancellable=cancellable)
     
     def ensure_window_visible(self):
         """Ensure the main window is properly visible on the screen."""
@@ -388,12 +443,41 @@ class MainWindow(QMainWindow):
                 NotificationType.INFO
             )
             
+    def on_update_image_dimensions(self):
+        """Open the dialog to update image dimensions in the database."""
+        try:
+            from src.ui.database_dimensions_update_dialog import DatabaseDimensionsUpdateDialog
+            from src.utils.image_dimensions_updater import ImageDimensionsUpdater
+            from src.database.enhanced_search import EnhancedSearch
+            
+            # Create an enhanced search instance if needed
+            enhanced_search = EnhancedSearch(self.db_manager)
+            
+            # Create and show the dialog
+            dialog = DatabaseDimensionsUpdateDialog(
+                parent=self,
+                db_manager=self.db_manager,
+                enhanced_search=enhanced_search,
+                language_manager=self.language_manager
+            )
+            dialog.exec()
+            
+        except Exception as e:
+            logger.error(f"Error opening dimensions update dialog: {e}")
+            self.notification_manager.show_notification(
+                "Error",
+                f"Could not open dimensions update dialog: {str(e)}",
+                NotificationType.ERROR
+            )
+    
     def on_convert_thumbnail_paths(self):
-        """Handle the Convert Thumbnail Paths to Relative menu action.
+        """Convert thumbnail paths from absolute to relative.
         
         This utility converts absolute thumbnail paths to relative paths in the database,
         making the application more portable for backup and restore operations.
         """
+        from src.utils.thumbnail_path_converter import convert_thumbnail_paths
+        convert_thumbnail_paths(self, self.db_manager)
         try:
             # Show confirmation dialog
             confirm = QMessageBox.question(
@@ -559,158 +643,158 @@ class MainWindow(QMainWindow):
     def setup_menus(self):
         """Set up application menus."""
         # --- FILE MENU ---
-        file_menu = self.menuBar().addMenu("File")
+        self.file_menu = self.menuBar().addMenu(self.language_manager.translate('main', 'file_menu', 'File'))
         
         # Folder management submenu
-        folder_submenu = file_menu.addMenu("Folder Management")
+        folder_submenu = self.file_menu.addMenu(self.language_manager.translate('file_menu', 'folder_management', 'Folder Management'))
         
         # Add folder action
-        add_folder_action = folder_submenu.addAction("Add Folder")
-        add_folder_action.triggered.connect(self.on_add_folder)
+        self.add_folder_action = folder_submenu.addAction(self.language_manager.translate('file_menu', 'add_folder', 'Add Folder'))
+        self.add_folder_action.triggered.connect(self.on_add_folder)
         
         # Remove folder action
-        remove_folder_action = folder_submenu.addAction("Remove Folder")
-        remove_folder_action.triggered.connect(self.on_remove_folder)
+        self.remove_folder_action = folder_submenu.addAction(self.language_manager.translate('file_menu', 'remove_folder', 'Remove Folder'))
+        self.remove_folder_action.triggered.connect(self.on_remove_folder)
         
         # Scan folder action
-        scan_folder_action = folder_submenu.addAction("Scan Folder")
-        scan_folder_action.triggered.connect(self.on_scan_folder)
+        self.scan_folder_action = folder_submenu.addAction(self.language_manager.translate('file_menu', 'scan_folder', 'Scan Folder'))
+        self.scan_folder_action.triggered.connect(self.on_scan_folder)
         
         # Add separator
         folder_submenu.addSeparator()
         
         # Empty database action
-        empty_db_action = folder_submenu.addAction("Empty Database")
-        empty_db_action.triggered.connect(self.on_empty_database)
+        self.empty_db_action = folder_submenu.addAction(self.language_manager.translate('file_menu', 'empty_database', 'Empty Database'))
+        self.empty_db_action.triggered.connect(self.on_empty_database)
         
         # File operations submenu
-        file_ops_submenu = file_menu.addMenu("File Operations")
+        file_ops_submenu = self.file_menu.addMenu(self.language_manager.translate('file_menu', 'file_operations', 'File Operations'))
         
         # Export action
-        export_action = file_ops_submenu.addAction("Export Selected Images...")
-        export_action.triggered.connect(self.export_selected_images)
+        self.export_action = file_ops_submenu.addAction(self.language_manager.translate('file_menu', 'export_images', 'Export Selected Images...'))
+        self.export_action.triggered.connect(self.export_selected_images)
         
         # Copy to folder action
-        copy_action = file_ops_submenu.addAction("Copy Selected to Folder")
-        copy_action.triggered.connect(self.on_batch_copy_images)
+        self.copy_action = file_ops_submenu.addAction(self.language_manager.translate('file_menu', 'copy_to_folder', 'Copy Selected to Folder'))
+        self.copy_action.triggered.connect(self.on_batch_copy_images)
         
         # Exit action
-        file_menu.addSeparator()
-        exit_action = file_menu.addAction("Exit")
-        exit_action.triggered.connect(self.close)
+        self.file_menu.addSeparator()
+        self.exit_action = self.file_menu.addAction(self.language_manager.translate('file_menu', 'exit', 'Exit'))
+        self.exit_action.triggered.connect(self.close)
         
         # --- EDIT MENU ---
-        edit_menu = self.menuBar().addMenu("Edit")
-        
-        # Rename action
-        rename_action = edit_menu.addAction("Rename Selected Images...")
-        rename_action.triggered.connect(self.rename_selected_images)
+        self.edit_menu = self.menuBar().addMenu(self.language_manager.translate('main', 'edit_menu', 'Edit'))
         
         # Delete submenu
-        delete_submenu = edit_menu.addMenu("Delete")
+        delete_submenu = self.edit_menu.addMenu(self.language_manager.translate('edit_menu', 'delete', 'Delete'))
         
         # Delete from database only
-        delete_db_action = delete_submenu.addAction("Delete from Database Only")
-        delete_db_action.triggered.connect(self.on_batch_delete_images_db_only)
+        self.delete_db_action = delete_submenu.addAction(self.language_manager.translate('edit_menu', 'delete_db_only', 'Delete from Database Only'))
+        self.delete_db_action.triggered.connect(self.on_batch_delete_images_db_only)
         
         # Delete from database and disk
-        delete_full_action = delete_submenu.addAction("Delete from Database and Disk")
-        delete_full_action.triggered.connect(self.on_batch_delete_images_with_files)
+        self.delete_full_action = delete_submenu.addAction(self.language_manager.translate('edit_menu', 'delete_with_files', 'Delete from Database and Disk'))
+        self.delete_full_action.triggered.connect(self.on_batch_delete_images_with_files)
         
         # Delete descriptions
-        delete_desc_action = delete_submenu.addAction("Delete Descriptions for Selected")
-        delete_desc_action.triggered.connect(self.on_batch_delete_descriptions)
+        self.delete_desc_action = delete_submenu.addAction(self.language_manager.translate('edit_menu', 'delete_descriptions', 'Delete Descriptions for Selected'))
+        self.delete_desc_action.triggered.connect(self.on_batch_delete_descriptions)
         
         # --- AI TOOLS MENU ---
-        ai_menu = self.menuBar().addMenu("AI Tools")
+        self.ai_menu = self.menuBar().addMenu(self.language_manager.translate('main', 'ai_tools_menu', 'AI Tools'))
         
         # Generate descriptions with options dialog
-        ai_menu.addAction("Generate Descriptions with Options...").triggered.connect(self.on_generate_descriptions)
+        self.ai_menu.addAction(self.language_manager.translate('ai_menu', 'generate_with_options', 'Generate Descriptions with Options...')).triggered.connect(self.on_generate_descriptions)
         
         # Generate descriptions for selected images only
-        ai_menu.addAction("Generate for Selected Images Only").triggered.connect(self.generate_descriptions_for_selected)
+        self.ai_menu.addAction(self.language_manager.translate('ai_menu', 'generate_selected', 'Generate for Selected Images Only')).triggered.connect(self.generate_descriptions_for_selected)
         
         # Generate descriptions for all images in folder
-        ai_menu.addAction("Generate for All Images in Folder").triggered.connect(self.generate_descriptions_for_folder)
+        self.ai_menu.addAction(self.language_manager.translate('ai_menu', 'generate_folder', 'Generate for All Images in Folder')).triggered.connect(self.generate_descriptions_for_folder)
         
         # --- BATCH OPERATIONS MENU ---
-        batch_menu = self.menuBar().addMenu("Batch Operations")
+        self.batch_menu = self.menuBar().addMenu(self.language_manager.translate('main', 'batch_menu', 'Batch Operations'))
         
         # Image processing submenu
-        img_proc_submenu = batch_menu.addMenu("Image Processing")
+        img_proc_submenu = self.batch_menu.addMenu(self.language_manager.translate('batch_menu', 'image_processing', 'Image Processing'))
         
         # Generate descriptions action
-        generate_batch_action = img_proc_submenu.addAction("Generate AI Descriptions")
-        generate_batch_action.triggered.connect(self.on_batch_generate_descriptions)
+        self.generate_batch_action = img_proc_submenu.addAction(self.language_manager.translate('batch_menu', 'generate_descriptions', 'Generate AI Descriptions'))
+        self.generate_batch_action.triggered.connect(self.on_batch_generate_descriptions)
         
         # Export action with enhanced options
-        export_batch_action = img_proc_submenu.addAction("Export Images...")
-        export_batch_action.triggered.connect(self.export_selected_images)
+        self.export_batch_action = img_proc_submenu.addAction(self.language_manager.translate('batch_menu', 'export_images', 'Export Images...'))
+        self.export_batch_action.triggered.connect(self.export_selected_images)
         
         # Rename action
-        rename_batch_action = img_proc_submenu.addAction("Rename Images")
-        rename_batch_action.triggered.connect(self.on_batch_rename_images)
+        self.rename_batch_action = img_proc_submenu.addAction(self.language_manager.translate('batch_menu', 'rename_images', 'Rename Images'))
+        self.rename_batch_action.triggered.connect(self.on_batch_rename_images)
         
         # File management submenu
-        file_mgmt_submenu = batch_menu.addMenu("File Management")
+        file_mgmt_submenu = self.batch_menu.addMenu(self.language_manager.translate('batch_menu', 'file_management', 'File Management'))
         
         # Copy to folder action
-        copy_batch_action = file_mgmt_submenu.addAction("Copy to Folder")
-        copy_batch_action.triggered.connect(self.on_batch_copy_images)
+        self.copy_batch_action = file_mgmt_submenu.addAction(self.language_manager.translate('batch_menu', 'copy_to_folder', 'Copy to Folder'))
+        self.copy_batch_action.triggered.connect(self.on_batch_copy_images)
         
         # Delete descriptions action
-        delete_desc_batch_action = file_mgmt_submenu.addAction("Delete Descriptions")
-        delete_desc_batch_action.triggered.connect(self.on_batch_delete_descriptions)
+        self.delete_desc_batch_action = file_mgmt_submenu.addAction(self.language_manager.translate('batch_menu', 'delete_descriptions', 'Delete Descriptions'))
+        self.delete_desc_batch_action.triggered.connect(self.on_batch_delete_descriptions)
         
         # Delete from database only action
-        delete_db_batch_action = file_mgmt_submenu.addAction("Delete from Database Only")
-        delete_db_batch_action.triggered.connect(self.on_batch_delete_images_db_only)
+        self.delete_db_batch_action = file_mgmt_submenu.addAction(self.language_manager.translate('batch_menu', 'delete_db_only', 'Delete from Database Only'))
+        self.delete_db_batch_action.triggered.connect(self.on_batch_delete_images_db_only)
         
         # Delete from database and disk action
-        delete_full_batch_action = file_mgmt_submenu.addAction("Delete from Database and Disk")
-        delete_full_batch_action.triggered.connect(self.on_batch_delete_images_with_files)
+        self.delete_full_batch_action = file_mgmt_submenu.addAction(self.language_manager.translate('batch_menu', 'delete_with_files', 'Delete from Database and Disk'))
+        self.delete_full_batch_action.triggered.connect(self.on_batch_delete_images_with_files)
         
         # --- TOOLS MENU ---
-        tools_menu = self.menuBar().addMenu("Tools")
+        self.tools_menu = self.menuBar().addMenu(self.language_manager.translate('main', 'tools_menu', 'Tools'))
         
         # Database submenu
-        db_submenu = tools_menu.addMenu("Database")
+        db_submenu = self.tools_menu.addMenu(self.language_manager.translate('tools_menu', 'database', 'Database'))
         
         # Comprehensive database maintenance tool
         # maintenance_action = db_submenu.addAction("Database Maintenance")
         # maintenance_action.triggered.connect(self.on_database_maintenance)
         
         # Dedicated database rebuild for corruption issues
-        rebuild_action = db_submenu.addAction("Rebuild Corrupted Database")
-        rebuild_action.triggered.connect(self.on_rebuild_database)
+        self.rebuild_action = db_submenu.addAction(self.language_manager.translate('tools_menu', 'rebuild_database', 'Rebuild Corrupted Database'))
+        self.rebuild_action.triggered.connect(self.on_rebuild_database)
         
         # Add separator before export/import actions
         db_submenu.addSeparator()
         
         # Export database action
-        export_db_action = db_submenu.addAction("Export Database")
-        export_db_action.triggered.connect(self.on_export_database)
+        self.export_db_action = db_submenu.addAction(self.language_manager.translate('tools_menu', 'export_database', 'Export Database'))
+        self.export_db_action.triggered.connect(self.on_export_database)
         
         # Import database action
-        import_db_action = db_submenu.addAction("Import Database")
-        import_db_action.triggered.connect(self.on_import_database)
+        self.import_db_action = db_submenu.addAction(self.language_manager.translate('tools_menu', 'import_database', 'Import Database'))
+        self.import_db_action.triggered.connect(self.on_import_database)
         
         # Add separator before utility actions
         db_submenu.addSeparator()
         
+        # Update image dimensions action
+        self.update_dimensions_action = db_submenu.addAction(self.language_manager.translate('tools_menu', 'update_dimensions', 'Update Image Dimensions'))
+        self.update_dimensions_action.triggered.connect(self.on_update_image_dimensions)
+        
         # Thumbnail path conversion action
-        convert_thumbnails_action = db_submenu.addAction("Convert Thumbnail Paths to Relative")
-        convert_thumbnails_action.triggered.connect(self.on_convert_thumbnail_paths)
+        self.convert_thumbnails_action = db_submenu.addAction(self.language_manager.translate('tools_menu', 'convert_thumbnails', 'Convert Thumbnail Paths to Relative'))
+        self.convert_thumbnails_action.triggered.connect(self.on_convert_thumbnail_paths)
         
         # Settings action
-        tools_menu.addSeparator()
-        settings_action = tools_menu.addAction("Settings")
-        settings_action.triggered.connect(self.on_settings)
+        self.tools_menu.addSeparator()
+        self.settings_action = self.tools_menu.addAction(self.language_manager.translate('tools_menu', 'settings', 'Settings'))
+        self.settings_action.triggered.connect(self.on_settings)
     
     def setup_ui(self):
         """Set up the main window UI."""
         # Window properties
-        self.setWindowTitle("STARNODES Image Manager V1.0.0")
+        self.setWindowTitle(self.language_manager.translate('main', 'title', 'STARNODES Image Manager V1.1.0'))
         self.setMinimumSize(1024, 768)
         
         # Create menu bar if it doesn't exist
@@ -736,12 +820,16 @@ class MainWindow(QMainWindow):
         # Split panel for folders and catalogs
         folder_catalog_splitter = QSplitter(Qt.Orientation.Vertical)
         
-        # Folder browser (top half)
-        self.folder_panel = FolderPanel(self.db_manager)
+        # Folder browser (top half) - pass language manager explicitly
+        self.folder_panel = FolderPanel(self.db_manager, self)
+        # Set language manager explicitly to ensure translations work
+        self.folder_panel.language_manager = self.language_manager
         folder_catalog_splitter.addWidget(self.folder_panel)
         
-        # Catalog browser (bottom half)
-        self.catalog_panel = CatalogPanel(self.db_manager)
+        # Catalog browser (bottom half) - pass language manager explicitly
+        self.catalog_panel = CatalogPanel(self.db_manager, self)
+        # Set language manager explicitly to ensure translations work
+        self.catalog_panel.language_manager = self.language_manager
         folder_catalog_splitter.addWidget(self.catalog_panel)
         
         # Set equal sizes for folder and catalog panels
@@ -767,15 +855,22 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.right_splitter)
         
         # Thumbnail browser - use factory to create appropriate implementation
-        self.thumbnail_browser = create_thumbnail_browser(self.db_manager, self.config_manager)
+        # Thumbnail browser - use factory to create appropriate implementation
+        # Pass the language manager to ensure translations work properly
+        self.thumbnail_browser = create_thumbnail_browser(
+            self.db_manager, 
+            self.config_manager,
+            parent=self,
+            language_manager=self.language_manager
+        )
         self.right_splitter.addWidget(self.thumbnail_browser)
         
         # Enable pagination for the thumbnail browser to handle large image collections
         from src.ui.pagination_integration import integrate_pagination
         integrate_pagination(self)
-        
+
         # Metadata panel
-        self.metadata_panel = MetadataPanel(self.db_manager)
+        self.metadata_panel = MetadataPanel(self.db_manager, self.language_manager)
         self.right_splitter.addWidget(self.metadata_panel)
         
         # Set right splitter sizes (thumbnail browser gets more space)
@@ -1066,10 +1161,10 @@ class MainWindow(QMainWindow):
             
         # Create a single progress dialog for all folders
         folder_count = len(folders)
-        self.progress_dialog = ProgressDialog(
-            "Scanning Folders",
-            f"Scanning {folder_count} folders for images...",
-            self,
+        self.progress_dialog = self.create_progress_dialog(
+            'scanning_folders_title',
+            'scanning_folders_description',
+            parent=self,
             cancellable=True
         )
         
@@ -1278,14 +1373,16 @@ class MainWindow(QMainWindow):
                     NotificationType.INFO
                 )
                 return
-            
+                
             # Create progress dialog
-            self.progress_dialog = ProgressDialog(
-                "Scanning Folder",
-                f"Scanning folder '{folder_path}' for images...",
-                self,
+            self.progress_dialog = self.create_progress_dialog(
+                'scanning_folder_title',
+                'scanning_folder_description',
+                parent=self,
                 cancellable=True
             )
+            # Update with folder path
+            self.progress_dialog.update_operation(f"Scanning folder '{folder_path}' for images...")
             
             # Define progress callback
             def progress_callback(current, total):
@@ -1462,12 +1559,14 @@ class MainWindow(QMainWindow):
                     
                     # Create progress dialog
                     mode_text = "new images only" if not process_all else "all images"
-                    progress_dialog = ProgressDialog(
-                        "Generating Descriptions",
-                        f"Generating AI descriptions for {mode_text} in '{folder_info['path']}'...\n" +
-                        f"Using Ollama model: {ollama_model}",
-                        self
+                    progress_dialog = self.create_progress_dialog(
+                        'generating_descriptions_title',
+                        'generating_descriptions_description',
+                        parent=self,
+                        cancellable=True
                     )
+                    # Update with specific details
+                    progress_dialog.update_operation(f"Generating AI descriptions for {mode_text} in '{folder_info['path']}'...\nUsing Ollama model: {ollama_model}")
                     
                     # Define progress callback
                     def progress_callback(current, total, message=None):
@@ -1533,9 +1632,11 @@ class MainWindow(QMainWindow):
     
     def on_settings(self):
         """Handle the Settings action."""
-        settings_dialog = SettingsDialog(self.config_manager, self.theme_manager, self)
+        settings_dialog = SettingsDialog(self.config_manager, self.theme_manager, self.language_manager, self)
         settings_dialog.theme_changed.connect(self.on_theme_changed)
+        settings_dialog.language_changed.connect(self.on_language_changed)
         theme_before = self.config_manager.get("ui", "theme", None)
+        language_before = self.config_manager.get("ui", "language", "en")
         
         if settings_dialog.exec() == QDialog.DialogCode.Accepted:
             # Reload component settings
@@ -1558,6 +1659,26 @@ class MainWindow(QMainWindow):
             theme_after = self.config_manager.get("ui", "theme", None)
             if theme_after != theme_before:
                 self.on_theme_changed(theme_after)
+                
+            # Check if the language was changed and update immediately
+            language_after = self.config_manager.get("ui", "language", "en")
+            if language_after != language_before:
+                # Re-initialize the language manager with the new language
+                from src.config.language_manager import LanguageManager
+                self.language_manager = LanguageManager(self.config_manager)
+                # Apply language to the main window and all panels
+                from src.ui.main_window_language import apply_language_to_main_window
+                apply_language_to_main_window(self, self.language_manager)
+                # Also update language_manager for all relevant panels/dialogs
+                if hasattr(self, 'metadata_panel') and hasattr(self.metadata_panel, 'set_language_manager'):
+                    self.metadata_panel.set_language_manager(self.language_manager)
+                if hasattr(self, 'enhanced_search_panel') and hasattr(self.enhanced_search_panel, 'set_language_manager'):
+                    self.enhanced_search_panel.set_language_manager(self.language_manager)
+                if hasattr(self, 'settings_dialog') and hasattr(self.settings_dialog, 'set_language_manager'):
+                    self.settings_dialog.set_language_manager(self.language_manager)
+                # Retranslate main window UI elements
+                if hasattr(self, 'retranslateUi'):
+                    self.retranslateUi()
 
     
     def on_folder_selected(self, folder_id, folder_path):
@@ -3830,17 +3951,74 @@ class MainWindow(QMainWindow):
                 
                 # Create ZIP file with same name as database but .zip extension
                 zip_path = os.path.splitext(file_path)[0] + ".zip"
-                app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
-                app_thumbnails_dir = os.path.join(app_dir, "thumbnails")
+                
+                # Get the correct thumbnails directory path
+                # Use the same directory structure as in the import function
+                if getattr(sys, 'frozen', False):
+                    # Portable mode - use directory next to executable
+                    exe_dir = os.path.dirname(sys.executable)
+                    app_thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+                else:
+                    # Script mode - use directory relative to database
+                    db_dir = os.path.dirname(self.db_manager.db_path)
+                    app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
+                    app_thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                    
+                    # If that doesn't exist, try alternative paths
+                    if not os.path.exists(app_thumbnails_dir) or not os.path.isdir(app_thumbnails_dir):
+                        # Try without the data subdirectory
+                        app_thumbnails_dir = os.path.join(app_dir, "thumbnails")
+                        
+                    if not os.path.exists(app_thumbnails_dir) or not os.path.isdir(app_thumbnails_dir):
+                        # Try in the database directory
+                        app_thumbnails_dir = os.path.join(db_dir, "thumbnails")
+                
+                # Log the paths we're checking
+                logger.info(f"Looking for thumbnails in: {app_thumbnails_dir}")
+                
+                # Initialize variables
+                thumbnail_count = 0
+                thumbnail_files = []
+                thumbnails_found = False
                 
                 # Check if thumbnails directory exists
                 if os.path.exists(app_thumbnails_dir) and os.path.isdir(app_thumbnails_dir):
-                    thumbnail_count = 0
-                    total_files = len(os.listdir(app_thumbnails_dir))
+                    # Log that we found the thumbnails directory
+                    logger.info(f"Found thumbnails directory: {app_thumbnails_dir}")
                     
-                    # Create a ZIP file with all thumbnails
-                    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                        for i, file in enumerate(glob.glob(os.path.join(app_thumbnails_dir, "*.*"))):
+                    # Check if there are any thumbnail files
+                    thumbnail_files = glob.glob(os.path.join(app_thumbnails_dir, "*.*"))
+                    total_files = len(thumbnail_files)
+                    
+                    if total_files == 0:
+                        logger.warning(f"No thumbnail files found in {app_thumbnails_dir}")
+                        progress_dialog.update_progress(70, 100, "No thumbnail files found. Creating empty ZIP...")
+                        QApplication.processEvents()
+                    else:
+                        logger.info(f"Found {total_files} thumbnail files to export")
+                        thumbnails_found = True
+                else:
+                    # Thumbnails directory not found
+                    logger.warning(f"Thumbnails directory not found at {app_thumbnails_dir}")
+                    progress_dialog.update_progress(70, 100, "Thumbnails directory not found. Creating empty ZIP...")
+                    QApplication.processEvents()
+                    total_files = 0
+                
+                # Always create the ZIP file, even if empty
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    logger.info(f"Creating ZIP file at: {zip_path}")
+                    
+                    # Add a README file to the ZIP if no thumbnails found
+                    if not thumbnails_found:
+                        readme_content = "This ZIP file is part of the database export but contains no thumbnails.\n"
+                        zipf.writestr("README.txt", readme_content)
+                        logger.info("Added README.txt to empty ZIP file")
+                    
+                    # Add thumbnails if found
+                    if thumbnails_found:
+                        logger.info(f"Exporting {total_files} thumbnails to {zip_path}")
+                        
+                        for i, file in enumerate(thumbnail_files):
                             # Update progress periodically
                             if i % 100 == 0:
                                 progress_percent = 60 + min(20, int((i / total_files) * 20))
@@ -3850,15 +4028,29 @@ class MainWindow(QMainWindow):
                                 )
                                 QApplication.processEvents()
                             
-                            thumbnail_count += 1
-                            # Add file to ZIP with relative path inside 'thumbnails' directory
-                            zipf.write(
-                                file,
-                                os.path.join("thumbnails", os.path.basename(file))
-                            )
+                            try:
+                                # Get just the filename without path
+                                filename = os.path.basename(file)
+                                # Add file to ZIP with path inside 'thumbnails' directory
+                                zipf.write(file, f"thumbnails/{filename}")
+                                thumbnail_count += 1
+                                
+                                # Log every 1000 files
+                                if thumbnail_count % 1000 == 0:
+                                    logger.debug(f"Added {thumbnail_count} thumbnails to ZIP")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error adding thumbnail to ZIP: {file} - {e}")
                     
-                    thumbnails_exported = True
-                    thumbnails_size = os.path.getsize(zip_path)
+                    # Verify the ZIP file was created
+                    if os.path.exists(zip_path):
+                        thumbnails_exported = True
+                        thumbnails_size = os.path.getsize(zip_path)
+                        logger.info(f"Successfully created thumbnails ZIP file: {zip_path}, size: {self._format_file_size(thumbnails_size)}")
+                    else:
+                        thumbnails_exported = False
+                        thumbnails_size = 0
+                        logger.error(f"Failed to create thumbnails ZIP file: {zip_path}")
             
             # Update progress
             progress_dialog.update_progress(80, 100, "Verifying export...")
@@ -4205,19 +4397,40 @@ class MainWindow(QMainWindow):
                                         logger.error(f"Error extracting {file}: {e}")
                                         # Try the old extraction method as fallback
                                         try:
+                                            # Handle different path formats in ZIP
                                             if '/' in file or '\\' in file:
-                                                # Extract to parent directory first
+                                                # For files in subdirectories, we need to extract the file structure
+                                                # and then copy the file to the thumbnails directory
+                                                
+                                                # Create a temporary extraction directory
                                                 temp_path = os.path.join(os.path.dirname(thumbnails_dir), "temp_extract")
                                                 os.makedirs(temp_path, exist_ok=True)
+                                                
+                                                # Extract the file to the temp directory
                                                 zipf.extract(file, temp_path)
                                                 
-                                                # Move the file to final destination
+                                                # Find the extracted file
                                                 extracted_file = os.path.join(temp_path, file)
+                                                
+                                                # Check if the file was extracted successfully
                                                 if os.path.exists(extracted_file):
+                                                    # Copy to final destination
                                                     shutil.copy2(extracted_file, target_path)
+                                                    logger.debug(f"Copied extracted file from {extracted_file} to {target_path}")
+                                                else:
+                                                    # Try to find the file with normalized path
+                                                    normalized_path = os.path.normpath(file)
+                                                    extracted_file = os.path.join(temp_path, normalized_path)
+                                                    if os.path.exists(extracted_file):
+                                                        shutil.copy2(extracted_file, target_path)
+                                                        logger.debug(f"Copied extracted file from normalized path {extracted_file} to {target_path}")
+                                                    else:
+                                                        logger.error(f"Extracted file not found at {extracted_file}")
                                             else:
                                                 # Direct extraction to thumbnails directory
                                                 zipf.extract(file, thumbnails_dir)
+                                                logger.debug(f"Directly extracted {file} to {thumbnails_dir}")
+                                                
                                         except Exception as e2:
                                             logger.error(f"Fallback extraction also failed for {file}: {e2}")
                             
@@ -4305,12 +4518,15 @@ class MainWindow(QMainWindow):
                 progress_dialog.update_progress(40, 100, "Preparing to import images...")
                 QApplication.processEvents()
                 
-                # Get all images to check for duplicates (this could be optimized for very large databases)
-                existing_images = set()
+                # Build a mapping of existing images: full_path -> set of file_hashes
+                existing_hashes = dict()  # full_path -> set of hashes
                 for folder_id in folder_id_mapping.values():
                     images = self.db_manager.get_images_for_folder(folder_id, limit=1000000)
                     for img in images:
-                        existing_images.add(img['full_path'])
+                        if img['full_path'] not in existing_hashes:
+                            existing_hashes[img['full_path']] = set()
+                        if img.get('file_hash'):
+                            existing_hashes[img['full_path']].add(img['file_hash'])
                 
                 # Import images
                 progress_dialog.update_progress(50, 100, "Importing images...")
@@ -4329,8 +4545,8 @@ class MainWindow(QMainWindow):
                         progress_dialog.update_progress(progress_percent, 100, f"Imported {added_images} of {total_images} images...")
                         QApplication.processEvents()
                     
-                    # Skip if image already exists in target
-                    if image['full_path'] in existing_images:
+                    # Skip if image with same full_path AND file_hash already exists in target
+                    if image['full_path'] in existing_hashes and image.get('file_hash') in existing_hashes[image['full_path']]:
                         skipped_images += 1
                         continue
                     
@@ -4344,26 +4560,40 @@ class MainWindow(QMainWindow):
                     
                     # Add image to target database
                     try:
-                        # Check if file exists
+                        # Only import images if the file exists
                         if not os.path.exists(image['full_path']):
-                            logger.warning(f"Image file not found, skipping: {image['full_path']}")
-                            skipped_images += 1
                             continue
                         
-                        # Add image to database
+                        # Determine thumbnail_path for merge:
+                        thumbnail_path = image.get('thumbnail_path')
+                        if thumbnail_path:
+                            # Check if thumbnail file exists (either already present or will be imported from ZIP)
+                            if getattr(sys, 'frozen', False):
+                                exe_dir = os.path.dirname(sys.executable)
+                                thumbnails_dir = os.path.join(exe_dir, "data", "thumbnails")
+                            else:
+                                app_dir = os.path.dirname(os.path.dirname(self.db_manager.db_path))
+                                thumbnails_dir = os.path.join(app_dir, "data", "thumbnails")
+                            thumbnail_file_path = os.path.join(thumbnails_dir, thumbnail_path)
+                            if not os.path.exists(thumbnail_file_path):
+                                # If the file does not exist now but will be imported from ZIP, allow it
+                                if not import_thumbnails:
+                                    thumbnail_path = None
+                        else:
+                            thumbnail_path = None
+
                         self.db_manager.add_image(
                             folder_id=new_folder_id,
                             filename=image['filename'],
                             full_path=image['full_path'],
                             file_size=image['file_size'],
                             file_hash=image.get('file_hash'),
-                            thumbnail_path=None,  # Thumbnails will be regenerated as needed
+                            thumbnail_path=thumbnail_path,
                             ai_description=image.get('ai_description')
                         )
-                        
+
                         # Update user description if present
                         if image.get('user_description'):
-                            # Get the new image ID - this is inefficient but works
                             new_images = self.db_manager.get_images_for_folder(new_folder_id, limit=1)
                             for new_img in new_images:
                                 if new_img['full_path'] == image['full_path']:
@@ -4853,7 +5083,7 @@ class MainWindow(QMainWindow):
                 
             # Update window title
             if hasattr(self, 'setWindowTitle'):
-                self.setWindowTitle("Star Image Browse - All Images")
+                self.setWindowTitle("STARNODES Image Manager - All Images")
                 
         except Exception as e:
             logger.error(f"Error viewing all images: {e}")

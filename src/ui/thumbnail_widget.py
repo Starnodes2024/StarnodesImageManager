@@ -32,7 +32,7 @@ class ThumbnailWidget(QFrame):
     _hover_delay = 300  # milliseconds
     _max_preview_size = 700  # Default max preview size
     
-    def __init__(self, image_id, thumbnail_path, filename, description=None, original_path=None, width=None, height=None, parent=None):
+    def __init__(self, image_id, thumbnail_path, filename, description=None, original_path=None, width=None, height=None, parent=None, language_manager=None):
         """Initialize the thumbnail widget.
         
         Args:
@@ -44,6 +44,7 @@ class ThumbnailWidget(QFrame):
             width (int, optional): Width of the image in pixels
             height (int, optional): Height of the image in pixels
             parent (QWidget, optional): Parent widget
+            language_manager: Language manager instance for translations
         """
         super().__init__(parent)
         
@@ -56,6 +57,7 @@ class ThumbnailWidget(QFrame):
         self.pixmap = None
         self._deleted = False
         self._is_hovering = False
+        self.language_manager = language_manager
         
         # Set image dimensions if provided (from database)
         if width is not None and height is not None:
@@ -65,7 +67,7 @@ class ThumbnailWidget(QFrame):
         
         # Initialize preview if this is the first thumbnail
         if ThumbnailWidget._hover_preview is None:
-            ThumbnailWidget._hover_preview = HoverPreviewWidget()
+            ThumbnailWidget._hover_preview = HoverPreviewWidget(language_manager=language_manager)
             
         # Initialize hover timer if this is the first thumbnail
         if ThumbnailWidget._hover_timer is None:
@@ -83,6 +85,31 @@ class ThumbnailWidget(QFrame):
         # Note: we don't attempt to disconnect signals in the destructor
         # as Qt will handle this automatically and attempts to do so
         # can lead to issues when the Python interpreter is shutting down
+    
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the thumbnail section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('thumbnail', key, default)
+        return default
+    
+    def set_language_manager(self, language_manager):
+        """Set the language manager for translations.
+        
+        Args:
+            language_manager: Language manager instance
+        """
+        self.language_manager = language_manager
+        # Update the hover preview widget if it exists
+        if ThumbnailWidget._hover_preview:
+            ThumbnailWidget._hover_preview.set_language_manager(language_manager)
     
     def setup_ui(self):
         """Set up the thumbnail widget UI."""
@@ -124,19 +151,30 @@ class ThumbnailWidget(QFrame):
         self.size_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         # Match the filename's styling
         
-        # Set size text if available
+        # Set image dimensions if available from database
         if self.image_size:
             width, height = self.image_size
-            size_text = f"{width}×{height}"
-            self.size_label.setText(size_text)
+            self.size_label.setText(f"{width} × {height}")
+        # If dimensions not available from database, try to get them from the file
+        elif self.original_path and os.path.exists(self.original_path):
+            try:
+                # Import PIL here to avoid dependency issues if not installed
+                from PIL import Image
+                with Image.open(self.original_path) as img:
+                    width, height = img.size
+                    # Store the dimensions for future use
+                    self.image_size = (width, height)
+                    self.size_label.setText(f"{width} × {height}")
+                    logger.debug(f"Got dimensions from file for {self.filename}: {width}×{height}")
+            except Exception as e:
+                logger.error(f"Error getting image dimensions from file: {e}")
+                self.size_label.setText(self.get_translation('dimensions_unknown', 'Dimensions unknown'))
+                self.size_label.setStyleSheet("font-size: 9pt;")
+        else:
+            self.size_label.setText(self.get_translation('dimensions_unknown', 'Dimensions unknown'))
             # Make dimensions use the same style as the filename
             self.size_label.setStyleSheet("font-size: 9pt;")
-            logger.debug(f"Using dimensions for {self.filename}: {size_text}")  # Changed to debug level
-        else:
-            # Don't try to open image files - just show that dimensions aren't available
-            self.size_label.setText("Dimensions not available")
-            self.size_label.setStyleSheet("font-size: 8pt; font-style: italic;")
-            logger.debug(f"No dimensions available for {self.filename}")
+            logger.debug(f"Using dimensions for {self.filename}: {self.size_label.text()}")
         
         layout.addWidget(self.size_label)
         
@@ -156,12 +194,12 @@ class ThumbnailWidget(QFrame):
     def load_thumbnail(self):
         """Load the thumbnail image."""
         if not self.thumbnail_path or not os.path.exists(self.thumbnail_path):
-            # Set placeholder
-            self.thumbnail_label.setText("No Thumbnail")
+            # Set placeholder with translation
+            self.thumbnail_label.setText(self.get_translation('no_thumbnail', 'No Thumbnail'))
             return
             
         # Actual loading is done by the LazyThumbnailLoader
-        self.thumbnail_label.setText("Loading...")
+        self.thumbnail_label.setText(self.get_translation('loading', 'Loading...'))
     
     def set_thumbnail(self, pixmap):
         """Set the thumbnail pixmap.
@@ -187,7 +225,7 @@ class ThumbnailWidget(QFrame):
                 self.thumbnail_label.setPixmap(scaled_pixmap)
             else:
                 # Use a default thumbnail or placeholder for missing images
-                self.thumbnail_label.setText("No image")
+                self.thumbnail_label.setText(self.get_translation('no_image', 'No image'))
         except RuntimeError:
             # Widget was deleted between our check and the attempt to update it
             pass

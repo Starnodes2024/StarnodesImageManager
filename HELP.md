@@ -1,4 +1,4 @@
-# STARNODES Image Manager v1.0.0 - Help Guide
+# STARNODES Image Manager v1.1.0 - Help Guide
 
 ## Installation Options
 

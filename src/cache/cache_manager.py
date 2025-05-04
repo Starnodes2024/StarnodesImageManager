@@ -14,6 +14,8 @@ import threading
 from functools import lru_cache
 from collections import OrderedDict, defaultdict
 from typing import Any, Dict, List, Tuple, Callable, Optional, Union
+from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
 
 logger = logging.getLogger("StarImageBrowse.cache.cache_manager")
 
@@ -343,6 +345,8 @@ class DiskCache(CacheLevel):
                     
                     with open(path, 'rb') as f:
                         value = pickle.load(f)
+                        
+
                     
                     # Update timestamp
                     self._metadata[key] = time.time()
@@ -377,6 +381,16 @@ class DiskCache(CacheLevel):
                     oldest_key = min(self._metadata.items(), key=lambda x: x[1])[0]
                     self.remove(oldest_key)
                     self.stats.record_eviction()
+                
+                # Skip QPixmap objects entirely - they can't be pickled
+                if isinstance(value, QPixmap):
+                    logger.debug(f"Skipping disk cache for QPixmap object with key {key}")
+                    # Just update metadata to mark it as cached, but don't actually store it
+                    # This prevents repeated attempts to cache the same QPixmap
+                    self._metadata[key] = time.time()
+                    self._save_metadata()
+                    self.stats.update_size(len(self._metadata))
+                    return True
                 
                 # Save to disk
                 path = self._get_path(key)

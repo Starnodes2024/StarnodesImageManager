@@ -218,8 +218,11 @@ def check_and_optimize_if_needed(main_window):
             response = QMessageBox.question(
                 main_window,
                 "Database Optimization",
-                f"Your image collection is getting large ({image_count} images, {db_size_mb:.2f} MB).\n\n"
-                f"Would you like to optimize the database for better performance?",
+                main_window.language_manager.get_translation(
+                    'db_optimization',
+                    'large_collection_warning',
+                    f"Your image collection is getting large ({image_count} images, {db_size_mb:.2f} MB).\n\nWould you like to optimize the database for better performance?"
+                ).format(image_count=image_count, db_size_mb=db_size_mb),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes
             )

@@ -23,6 +23,58 @@ class EnhancedSearch:
         """
         self.db_ops = db_operations
         
+        # Ensure the database has width and height columns
+        self._ensure_dimension_columns()
+        
+    def _ensure_dimension_columns(self):
+        """Ensure the database has width and height columns in the images table.
+        
+        This is called during initialization to make sure the dimension search will work.
+        """
+        conn = self.db_ops.db.get_connection()
+        if not conn:
+            logger.error("Failed to get database connection to check dimension columns")
+            return
+            
+        try:
+            # Check if images table has width and height columns
+            cursor = conn.execute("PRAGMA table_info(images)")
+            if not cursor:
+                logger.error("Failed to get table info for images table")
+                return
+                
+            columns = {row[1] for row in cursor.fetchall()}
+            
+            # Add width and height columns if they don't exist
+            if "width" not in columns or "height" not in columns:
+                logger.info("Adding missing dimension columns to images table")
+                
+                if "width" not in columns:
+                    try:
+                        conn.execute("ALTER TABLE images ADD COLUMN width INTEGER")
+                        logger.info("Added width column to images table")
+                    except Exception as e:
+                        logger.error(f"Error adding width column: {e}")
+                
+                if "height" not in columns:
+                    try:
+                        conn.execute("ALTER TABLE images ADD COLUMN height INTEGER")
+                        logger.info("Added height column to images table")
+                    except Exception as e:
+                        logger.error(f"Error adding height column: {e}")
+                
+                # Create index on width and height for faster dimension searches
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_images_dimensions ON images (width, height)")
+                    logger.info("Created index on width and height columns")
+                except Exception as e:
+                    logger.error(f"Error creating dimension index: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error checking dimension columns: {e}")
+        finally:
+            conn.disconnect()
+    
     def reset_connection(self):
         """Reset the database connection for the enhanced search.
         
@@ -38,6 +90,9 @@ class EnhancedSearch:
                 if hasattr(self.db_ops.db, 'connect') and callable(self.db_ops.db.connect):
                     self.db_ops.db.connect()
                     logger.info("Enhanced search database connection reset successful")
+                    
+                # Ensure dimension columns exist after reconnection
+                self._ensure_dimension_columns()
             except Exception as e:
                 logger.error(f"Error resetting enhanced search database connection: {e}")
         
@@ -129,39 +184,71 @@ class EnhancedSearch:
             
             # 3. Image dimensions
             if params.get('dimensions_enabled', False):
+                # Log dimension search parameters for debugging
+                logger.info(f"Dimension search enabled with params: {params}")
+                
+                # Check if the database has any images with dimensions
+                has_dimensions = False
+                try:
+                    check_conn = self.db_ops.db.get_connection()
+                    if check_conn:
+                        cursor = check_conn.execute("SELECT COUNT(*) FROM images WHERE width IS NOT NULL AND height IS NOT NULL")
+                        if cursor:
+                            count = cursor.fetchone()[0]
+                            has_dimensions = count > 0
+                            logger.info(f"Found {count} images with dimensions in database")
+                        check_conn.disconnect()
+                except Exception as e:
+                    logger.error(f"Error checking for images with dimensions: {e}")
+                
+                if not has_dimensions:
+                    logger.warning("No images with dimensions found in database - dimension search will return no results")
+                    # Force no results by adding an impossible condition
+                    query_parts.append("1=0")
+                    return
+                
+                # Add a condition to filter only images that have dimensions stored
+                query_parts.append("(width IS NOT NULL AND height IS NOT NULL AND width > 0 AND height > 0)")
+                
                 dimension_preset = params.get('dimension_preset', 0)
                 
                 if dimension_preset == 5:  # Square
-                    query_parts.append("width = height AND width IS NOT NULL AND height IS NOT NULL")
+                    query_parts.append("width = height")
+                    logger.info("Searching for square images")
                 elif dimension_preset == 6:  # Portrait
-                    query_parts.append("height > width AND width IS NOT NULL AND height IS NOT NULL")
+                    query_parts.append("height > width")
+                    logger.info("Searching for portrait images")
                 elif dimension_preset == 7:  # Landscape
-                    query_parts.append("width > height AND width IS NOT NULL AND height IS NOT NULL")
+                    query_parts.append("width > height")
+                    logger.info("Searching for landscape images")
                 else:  # Custom or specific resolution
-                    min_width = params.get('min_width')
-                    max_width = params.get('max_width')
-                    min_height = params.get('min_height')
-                    max_height = params.get('max_height')
-                    
-                    # Add a condition to filter only images that have dimensions stored
-                    query_parts.append("(width IS NOT NULL AND height IS NOT NULL)")
-                    
-                    # Apply dimension filters only if they're useful values
-                    if min_width is not None and min_width > 0:
-                        query_parts.append("width >= ?")
-                        query_params.append(min_width)
-                    
-                    if max_width is not None and max_width < 10000:
-                        query_parts.append("width <= ?")
-                        query_params.append(max_width)
-                    
-                    if min_height is not None and min_height > 0:
-                        query_parts.append("height >= ?")
-                        query_params.append(min_height)
-                    
-                    if max_height is not None and max_height < 10000:
-                        query_parts.append("height <= ?")
-                        query_params.append(max_height)
+                    # Convert parameters to integers to ensure proper comparison
+                    try:
+                        min_width = int(params.get('min_width', 0) or 0)
+                        max_width = int(params.get('max_width', 10000) or 10000)
+                        min_height = int(params.get('min_height', 0) or 0)
+                        max_height = int(params.get('max_height', 10000) or 10000)
+                        
+                        logger.info(f"Dimension filters: width {min_width}-{max_width}, height {min_height}-{max_height}")
+                        
+                        # Apply dimension filters only if they're useful values
+                        if min_width > 0:
+                            query_parts.append("width >= ?")
+                            query_params.append(min_width)
+                        
+                        if max_width < 10000:
+                            query_parts.append("width <= ?")
+                            query_params.append(max_width)
+                        
+                        if min_height > 0:
+                            query_parts.append("height >= ?")
+                            query_params.append(min_height)
+                        
+                        if max_height < 10000:
+                            query_parts.append("height <= ?")
+                            query_params.append(max_height)
+                    except (ValueError, TypeError) as e:
+                        logger.error(f"Error converting dimension values: {e}")
             
             # Combine all parts of the query
             final_query = base_query
@@ -174,15 +261,26 @@ class EnhancedSearch:
             query_params.append(offset)
             
             # Execute the query
-            logger.debug(f"Executing search query: {final_query} with params: {query_params}")
-            cursor = conn.execute(final_query, tuple(query_params))
-            if not cursor:
-                logger.error("Failed to execute search query")
-                return []
+            logger.info(f"Executing search query: {final_query}")
+            logger.info(f"Query parameters: {query_params}")
             
-            # Convert to list of dictionaries
-            results = [dict(row) for row in cursor.fetchall()]
-            logger.info(f"Found {len(results)} images matching search criteria")
+            try:
+                cursor = conn.execute(final_query, tuple(query_params))
+                if not cursor:
+                    logger.error("Failed to execute search query")
+                    return []
+                
+                # Convert to list of dictionaries
+                results = [dict(row) for row in cursor.fetchall()]
+                logger.info(f"Found {len(results)} images matching search criteria")
+                
+                # Log first few results for debugging
+                if results and len(results) > 0:
+                    sample = results[0]
+                    logger.info(f"Sample result - ID: {sample.get('image_id')}, Width: {sample.get('width')}, Height: {sample.get('height')}")
+            except Exception as query_error:
+                logger.error(f"Error executing search query: {query_error}")
+                return []
             
             return results
             
@@ -204,11 +302,29 @@ class EnhancedSearch:
         Returns:
             bool: True if successful, False otherwise
         """
+        # Ensure the database has width and height columns
+        self._ensure_dimension_columns()
+        
         conn = self.db_ops.db.get_connection()
         if not conn:
             return False
             
         try:
+            # Make sure width and height are integers
+            try:
+                width = int(width) if width is not None else None
+                height = int(height) if height is not None else None
+            except (ValueError, TypeError):
+                logger.error(f"Invalid dimensions for image {image_id}: width={width}, height={height}")
+                conn.rollback()
+                return False
+                
+            # Skip update if both dimensions are None or zero
+            if (width is None or width <= 0) and (height is None or height <= 0):
+                logger.warning(f"Skipping dimension update for image {image_id} - invalid dimensions")
+                conn.rollback()
+                return False
+                
             # Begin transaction
             if not conn.begin_transaction():
                 raise Exception("Failed to begin transaction")
@@ -221,7 +337,6 @@ class EnhancedSearch:
             if not cursor:
                 raise Exception("Failed to update image dimensions")
                 
-            # Check if any rows were affected
             if cursor.rowcount == 0:
                 logger.warning(f"No image found with ID {image_id} to update dimensions")
                 conn.rollback()

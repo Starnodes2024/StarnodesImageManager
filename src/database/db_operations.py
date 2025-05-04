@@ -354,7 +354,12 @@ class DatabaseOperations:
                 # Attempt repair if we haven't exceeded retry limit
                 if retry_count < MAX_RETRIES:
                     logger.warning("Attempting database repair...")
+                    
+                    # Make sure to disconnect this connection
                     conn.disconnect()
+                    
+                    # Force close all database connections
+                    self.db.close_all_connections()
                     
                     # Import repair function here to avoid circular imports
                     from src.database.db_repair import repair_database

@@ -25,6 +25,21 @@ class CatalogPanel(QWidget):
     catalog_removed = pyqtSignal(int)  # Signal emitted when a catalog is removed (catalog_id)
     add_catalog_requested = pyqtSignal()  # Signal to request adding a new catalog
     
+    def get_translation(self, section, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            section (str): Section in the translations
+            key (str): Key in the section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if self.language_manager:
+            return self.language_manager.get_translation(section, key, default)
+        return default
+    
     def __init__(self, db_manager, parent=None):
         """Initialize the catalog panel.
         
@@ -36,24 +51,52 @@ class CatalogPanel(QWidget):
         
         self.db_manager = db_manager
         
+        # Try to get language manager from parent window
+        self.language_manager = None
+        parent_widget = self
+        while parent_widget.parent() is not None:
+            parent_widget = parent_widget.parent()
+            if hasattr(parent_widget, 'language_manager'):
+                self.language_manager = parent_widget.language_manager
+                break
+        
         self.setup_ui()
+        self.retranslateUi()
         self.refresh_catalogs()
+
+    def retranslateUi(self):
+        """Update all UI texts based on the current language manager."""
+        if hasattr(self, 'header_label'):
+            self.header_label.setText(self.get_translation('catalog_panel', 'title', 'Catalogs'))
+        if hasattr(self, 'add_catalog_button'):
+            self.add_catalog_button.setToolTip(self.get_translation('catalog_panel', 'add', 'Add New Catalog'))
+            self.add_catalog_button.setText(self.get_translation('catalog_panel', 'add_button', '+'))
+        if hasattr(self, 'catalog_tree'):
+            self.catalog_tree.setHeaderLabel(self.get_translation('catalog_panel', 'tree_header', 'Catalogs'))
+        # Any other UI elements needing translation can be added here
+
+    def set_language_manager(self, language_manager):
+        self.language_manager = language_manager
+        self.retranslateUi()
+
     
     def setup_ui(self):
         """Set up the catalog panel UI."""
+        self.setMinimumWidth(300)
         # Main layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
         # Header
         header_layout = QHBoxLayout()
-        header_label = QLabel("Catalogs")
-        header_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(header_label)
+        # Use catalog_panel section for translations
+        self.header_label = QLabel()
+        self.header_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(self.header_label)
         
         # Add New Catalog button
         self.add_catalog_button = QPushButton("+")
-        self.add_catalog_button.setToolTip("Add New Catalog")
+        self.add_catalog_button.setToolTip(self.get_translation('catalog_panel', 'add', 'Add New Catalog'))
         self.add_catalog_button.setFixedSize(30, 30)  # Increased size for better visibility
         self.add_catalog_button.setStyleSheet("""
             QPushButton {
@@ -83,7 +126,11 @@ class CatalogPanel(QWidget):
     def on_add_catalog_clicked(self):
         """Handler for Add New Catalog button click."""
         # Show dialog to get catalog name
-        name, ok = QInputDialog.getText(self, "Add New Catalog", "Catalog Name:")
+        name, ok = QInputDialog.getText(
+            self, 
+            self.get_translation('catalog_panel', 'add_dialog_title', 'Add New Catalog'), 
+            self.get_translation('catalog_panel', 'name_prompt', 'Catalog Name:')
+        )
         
         if ok and name:
             # Add the catalog to the database
@@ -100,8 +147,9 @@ class CatalogPanel(QWidget):
                 self.select_catalog_by_id(catalog_id)
             else:
                 QMessageBox.critical(
-                    self, "Error", 
-                    "Failed to create catalog.",
+                    self, 
+                    self.get_translation('common', 'error', 'Error'), 
+                    self.get_translation('catalog_panel', 'create_failed', 'Failed to create catalog.'),
                     QMessageBox.StandardButton.Ok
                 )
         
@@ -151,35 +199,29 @@ class CatalogPanel(QWidget):
         Args:
             position: Position where to show the menu
         """
-        # Get the item at the clicked position
+        # Get the item at the position
         item = self.catalog_tree.itemAt(position)
         
         if not item:
             return
         
-        # Get catalog ID from item data
         catalog_id = item.data(0, Qt.ItemDataRole.UserRole)
         
         if catalog_id is None:
             return
         
-        # Get catalog info from database
-        catalog_info = self.db_manager.get_catalog_by_id(catalog_id)
-        
-        if not catalog_info:
-            return
-        
-        catalog_name = catalog_info["name"]
+        # Get catalog name
+        catalog_name = item.text(0)
         
         # Create context menu
         menu = QMenu()
         
         # Add actions
-        rename_action = menu.addAction("Rename Catalog")
+        rename_action = menu.addAction(self.get_translation('catalog_context_menu', 'rename', 'Rename Catalog'))
         
         menu.addSeparator()
         
-        remove_action = menu.addAction("Remove Catalog")
+        remove_action = menu.addAction(self.get_translation('catalog_context_menu', 'remove', 'Remove Catalog'))
         
         # Show menu and get selected action
         action = menu.exec(self.catalog_tree.mapToGlobal(position))
@@ -197,10 +239,11 @@ class CatalogPanel(QWidget):
             catalog_id (int): ID of the catalog to rename
             current_name (str): Current name of the catalog
         """
-        # Show dialog to get new catalog name
+        # Show dialog to get new name
         new_name, ok = QInputDialog.getText(
-            self, "Rename Catalog", 
-            "New Catalog Name:", 
+            self, 
+            self.get_translation('catalog_panel', 'rename_title', 'Rename Catalog'), 
+            self.get_translation('catalog_panel', 'rename_prompt', 'Enter a new name for the catalog:'), 
             text=current_name
         )
         
@@ -227,8 +270,9 @@ class CatalogPanel(QWidget):
                 self.select_catalog_by_id(new_catalog_id)
             else:
                 QMessageBox.critical(
-                    self, "Error", 
-                    "Failed to rename catalog.",
+                    self, 
+                    self.get_translation('common', 'error', 'Error'), 
+                    self.get_translation('catalog_panel', 'rename_failed', 'Failed to rename catalog.'),
                     QMessageBox.StandardButton.Ok
                 )
     
@@ -240,8 +284,9 @@ class CatalogPanel(QWidget):
         """
         # Confirm removal
         confirm = QMessageBox.question(
-            self, "Confirm Removal", 
-            "Are you sure you want to remove this catalog? Images will not be deleted, but their association with this catalog will be removed.",
+            self, 
+            self.get_translation('catalog_panel', 'confirm_removal_title', 'Confirm Removal'), 
+            self.get_translation('catalog_panel', 'confirm_removal_message', 'Are you sure you want to remove this catalog? Images will not be deleted, but their association with this catalog will be removed.'),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -260,8 +305,9 @@ class CatalogPanel(QWidget):
             self.refresh_catalogs()
         else:
             QMessageBox.critical(
-                self, "Error", 
-                "Failed to remove catalog from database.",
+                self, 
+                self.get_translation('common', 'error', 'Error'), 
+                self.get_translation('catalog_panel', 'remove_failed', 'Failed to remove catalog from database.'),
                 QMessageBox.StandardButton.Ok
             )
     

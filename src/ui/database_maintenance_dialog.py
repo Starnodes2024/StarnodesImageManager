@@ -22,24 +22,26 @@ logger = logging.getLogger("StarImageBrowse.ui.database_maintenance_dialog")
 class DatabaseMaintenanceDialog(QDialog):
     """Dialog for performing all database maintenance tasks in one place."""
     
-    def __init__(self, parent, db_manager, enhanced_search=None):
+    def __init__(self, parent, db_manager, enhanced_search=None, language_manager=None):
         """Initialize the dialog.
         
         Args:
             parent: Parent widget
             db_manager: Database manager instance
             enhanced_search: Enhanced search instance (optional)
+            language_manager: Language manager instance
         """
         super().__init__(parent)
         self.db_manager = db_manager
         self.enhanced_search = enhanced_search or db_manager.enhanced_search
+        self.language_manager = language_manager
         self.updater = ImageDimensionsUpdater(db_manager, self.enhanced_search)
         
         # Set up task tracking
         self.tasks = {
             "repair_database": {
-                "name": "Database Repair & Integrity Check",
-                "description": "Checks and repairs database corruption issues",
+                "name": self.get_translation('repair_database_name', 'Database Repair & Integrity Check'),
+                "description": self.get_translation('repair_database_desc', 'Checks and repairs database corruption issues'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
@@ -47,40 +49,40 @@ class DatabaseMaintenanceDialog(QDialog):
                 "critical": True  # This task must run first and successfully
             },
             "schema_upgrade": {
-                "name": "Database Schema Upgrade",
-                "description": "Upgrades the database schema to add missing tables, columns, and indexes",
+                "name": self.get_translation('schema_upgrade_name', 'Database Schema Upgrade'),
+                "description": self.get_translation('schema_upgrade_desc', 'Upgrades the database schema to add missing tables, columns, and indexes'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
                 "result": ""
             },
             "metadata_update": {
-                "name": "Image Metadata Update",
-                "description": "Updates file format, date added, and last modified information for all images",
+                "name": self.get_translation('metadata_update_name', 'Image Metadata Update'),
+                "description": self.get_translation('metadata_update_desc', 'Updates file format, date added, and last modified information for all images'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
                 "result": ""
             },
             "dimensions_update": {
-                "name": "Image Dimensions Update",
-                "description": "Updates width and height information for all images in the database",
+                "name": self.get_translation('dimensions_update_name', 'Image Dimensions Update'),
+                "description": self.get_translation('dimensions_update_desc', 'Updates width and height information for all images in the database'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
                 "result": ""
             },
             "fts_rebuild": {
-                "name": "Full-Text Search Rebuild",
-                "description": "Rebuilds the full-text search index for faster text searching",
+                "name": self.get_translation('fts_rebuild_name', 'Full-Text Search Rebuild'),
+                "description": self.get_translation('fts_rebuild_desc', 'Rebuilds the full-text search index for faster text searching'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
                 "result": ""
             },
             "optimize_database": {
-                "name": "Database Optimization",
-                "description": "Optimizes the database file for better performance",
+                "name": self.get_translation('optimize_database_name', 'Database Optimization'),
+                "description": self.get_translation('optimize_database_desc', 'Optimizes the database file for better performance'),
                 "enabled": True,
                 "completed": False,
                 "in_progress": False,
@@ -89,17 +91,33 @@ class DatabaseMaintenanceDialog(QDialog):
         }
         
         self.setup_ui()
+        self.retranslateUi()
         
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the db_maintenance section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('db_maintenance', key, default)
+        return default
+    
     def setup_ui(self):
         """Set up the dialog UI."""
-        self.setWindowTitle("Database Maintenance")
         self.setMinimumWidth(600)
         self.setMinimumHeight(500)
         
         main_layout = QVBoxLayout(self)
         
         # Info label
-        info_text = (
+        self.info_label = QLabel("")
+        self.info_label.setWordWrap(True)
+        main_layout.addWidget(self.info_label)
             "This tool performs comprehensive database maintenance to ensure optimal performance "
             "and compatibility with the latest features. Select the tasks you want to perform:"
         )
@@ -110,6 +128,10 @@ class DatabaseMaintenanceDialog(QDialog):
         # Task selection area
         self.task_area = QScrollArea()
         self.task_area.setWidgetResizable(True)
+        
+        # Tasks group
+        tasks_group = QGroupBox(self.get_translation('tasks_group', 'Maintenance Tasks'))
+        tasks_layout = QVBoxLayout(tasks_group)
         
         task_widget = QWidget()
         self.task_layout = QVBoxLayout(task_widget)
@@ -152,19 +174,26 @@ class DatabaseMaintenanceDialog(QDialog):
             # Add the frame to the task layout
             self.task_layout.addWidget(task_frame)
         
+        tasks_layout.addLayout(self.task_layout)
         self.task_area.setWidget(task_widget)
-        main_layout.addWidget(self.task_area)
+        main_layout.addWidget(tasks_group)
+        
+        # Progress group
+        progress_group = QGroupBox(self.get_translation('progress_group', 'Progress'))
+        progress_layout = QVBoxLayout(progress_group)
         
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        main_layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(self.progress_bar)
         
         # Status label
-        self.status_label = QLabel("Ready to perform maintenance tasks")
+        self.status_label = QLabel(self.get_translation('ready_status', 'Ready to perform maintenance'))
         self.status_label.setWordWrap(True)
-        main_layout.addWidget(self.status_label)
+        progress_layout.addWidget(self.status_label)
+        
+        main_layout.addWidget(progress_group)
         
         # Buttons
         button_box = QDialogButtonBox(
@@ -175,8 +204,8 @@ class DatabaseMaintenanceDialog(QDialog):
         button_box.rejected.connect(self.reject)
         
         # Rename the buttons
-        button_box.button(QDialogButtonBox.StandardButton.Ok).setText("Start Maintenance")
-        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Close")
+        button_box.button(QDialogButtonBox.StandardButton.Ok).setText(self.get_translation('start_maintenance', 'Start Maintenance'))
+        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(self.get_translation('close', 'Close'))
         
         main_layout.addWidget(button_box)
         
@@ -224,7 +253,7 @@ class DatabaseMaintenanceDialog(QDialog):
         self.maintenance_thread.start()
         
         # Update status
-        self.status_label.setText("Performing maintenance tasks...")
+        self.status_label.setText(self.get_translation('starting_maintenance', 'Starting maintenance...'))
     
     @pyqtSlot(int, int, str)
     def update_progress(self, current, total, message):
@@ -294,8 +323,11 @@ class DatabaseMaintenanceDialog(QDialog):
         
         QMessageBox.information(
             self,
-            "Maintenance Complete",
-            f"Database maintenance completed.\n\n{status}\n\nDetails:\n{details}",
+            self.get_translation('maintenance_complete_title', 'Maintenance Complete'),
+            self.get_translation('maintenance_complete_message', 'Database maintenance completed with {success} tasks successful and {failed} failed.').format(
+                success=completed_count,
+                failed=failed_count
+            ),
             QMessageBox.StandardButton.Ok
         )
     
@@ -316,8 +348,8 @@ class DatabaseMaintenanceDialog(QDialog):
         # Show error message
         QMessageBox.critical(
             self,
-            "Maintenance Error",
-            f"An error occurred during database maintenance:\n{error_message}",
+            self.get_translation('maintenance_error_title', 'Maintenance Error'),
+            self.get_translation('maintenance_error_message', 'An error occurred during database maintenance:\n{error}').format(error=error_message),
             QMessageBox.StandardButton.Ok
         )
 

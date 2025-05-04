@@ -23,7 +23,23 @@ class ErrorHandler:
     """Centralized error handling and user feedback utility."""
     
     @staticmethod
-    def show_message_box(parent, title, message, message_type=MessageType.INFO, details=None):
+    def get_translation(language_manager, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            language_manager: Language manager instance
+            key (str): Key in the error_handler section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if language_manager:
+            return language_manager.translate('error_handler', key, default)
+        return default
+    
+    @staticmethod
+    def show_message_box(parent, title, message, message_type=MessageType.INFO, details=None, language_manager=None):
         """Show a message box to the user.
         
         Args:
@@ -65,11 +81,17 @@ class ErrorHandler:
         if details:
             msg_box.setDetailedText(details)
         
+        # Translate buttons if language manager is available
+        if language_manager:
+            ok_button = msg_box.button(QMessageBox.StandardButton.Ok)
+            if ok_button:
+                ok_button.setText(ErrorHandler.get_translation(language_manager, 'ok_button', 'OK'))
+        
         # Show message box and return result
         return msg_box.exec()
     
     @staticmethod
-    def show_status_message(status_bar, message, message_type=MessageType.INFO, timeout=5000):
+    def show_status_message(status_bar, message, message_type=MessageType.INFO, timeout=5000, language_manager=None):
         """Show a message in the status bar with optional styling.
         
         Args:
@@ -119,7 +141,7 @@ class ErrorHandler:
             status_bar.clearMessage()
     
     @staticmethod
-    def handle_exception(parent, exception, operation_name, status_bar=None, show_message_box=True):
+    def handle_exception(parent, exception, operation_name, status_bar=None, show_message_box=True, language_manager=None):
         """Handle an exception and provide appropriate feedback.
         
         Args:
@@ -133,7 +155,14 @@ class ErrorHandler:
             str: Error message generated for the exception
         """
         # Get exception details
-        error_message = f"Error during {operation_name}: {str(exception)}"
+        if language_manager:
+            error_message = ErrorHandler.get_translation(
+                language_manager,
+                'error_during_operation',
+                f"Error during {operation_name}: {str(exception)}"
+            ).format(operation=operation_name, error=str(exception))
+        else:
+            error_message = f"Error during {operation_name}: {str(exception)}"
         error_details = traceback.format_exc()
         
         # Log the error
@@ -142,22 +171,33 @@ class ErrorHandler:
         
         # Show status message if status bar provided
         if status_bar:
-            ErrorHandler.show_status_message(status_bar, error_message, MessageType.ERROR)
+            ErrorHandler.show_status_message(status_bar, error_message, MessageType.ERROR, 5000, language_manager)
         
         # Show message box if requested
         if show_message_box and parent:
+            # Get translated title
+            if language_manager:
+                title = ErrorHandler.get_translation(
+                    language_manager,
+                    'operation_failed',
+                    f"{operation_name} Failed"
+                ).format(operation=operation_name)
+            else:
+                title = f"{operation_name} Failed"
+                
             ErrorHandler.show_message_box(
                 parent,
-                f"{operation_name} Failed",
+                title,
                 error_message,
                 MessageType.ERROR,
-                error_details
+                error_details,
+                language_manager
             )
         
         return error_message
     
     @staticmethod
-    def confirm_action(parent, title, message, details=None):
+    def confirm_action(parent, title, message, details=None, language_manager=None):
         """Ask the user to confirm an action.
         
         Args:
@@ -176,6 +216,15 @@ class ErrorHandler:
         msg_box.setIcon(QMessageBox.Icon.Question)
         msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Translate buttons if language manager is available
+        if language_manager:
+            yes_button = msg_box.button(QMessageBox.StandardButton.Yes)
+            no_button = msg_box.button(QMessageBox.StandardButton.No)
+            if yes_button:
+                yes_button.setText(ErrorHandler.get_translation(language_manager, 'yes_button', 'Yes'))
+            if no_button:
+                no_button.setText(ErrorHandler.get_translation(language_manager, 'no_button', 'No'))
         
         # Add details if provided
         if details:

@@ -10,7 +10,7 @@ import time
 from datetime import timedelta
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-    QProgressBar, QPushButton, QTextEdit
+    QProgressBar, QPushButton, QTextEdit, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QMetaObject, Q_ARG, Qt, QTimer
 
@@ -21,7 +21,21 @@ class ProgressDialog(QDialog):
     
     cancelled = pyqtSignal()  # Signal emitted when the operation is cancelled
     
-    def __init__(self, title, description, parent=None, cancellable=True):
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the progress section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('progress', key, default)
+        return default
+    
+    def __init__(self, title, description, parent=None, cancellable=True, language_manager=None):
         """Initialize the progress dialog.
         
         Args:
@@ -29,9 +43,11 @@ class ProgressDialog(QDialog):
             description (str): Description of the operation
             parent (QWidget, optional): Parent widget
             cancellable (bool): Whether the operation can be cancelled
+            language_manager: Language manager instance
         """
         super().__init__(parent)
         
+        self.language_manager = language_manager
         self.setWindowTitle(title)
         self.description = description
         self.cancellable = cancellable
@@ -52,6 +68,7 @@ class ProgressDialog(QDialog):
         try:
             # Make dialog non-resizable
             self.setFixedSize(500, 300)
+            self.setMinimumWidth(400)
             
             # Remove close button if not cancellable
             if not self.cancellable:
@@ -71,11 +88,11 @@ class ProgressDialog(QDialog):
             layout.addWidget(self.progress_bar)
             
             # Current operation label
-            self.operation_label = QLabel("Initializing...")
+            self.operation_label = QLabel(self.get_translation('initializing', 'Initializing...'))
             layout.addWidget(self.operation_label)
             
             # Time remaining label
-            self.time_label = QLabel("Estimating time remaining...")
+            self.time_label = QLabel(self.get_translation('estimating_time', 'Estimating time remaining...'))
             self.time_label.setVisible(False)  # Hide initially until we have an estimate
             layout.addWidget(self.time_label)
             
@@ -90,14 +107,14 @@ class ProgressDialog(QDialog):
             button_layout.addStretch(1)
             
             # Close button (initially hidden)
-            self.close_button = QPushButton("Close")
+            self.close_button = QPushButton(self.get_translation('close', 'Close'))
             self.close_button.clicked.connect(self.accept)
             self.close_button.setVisible(False)
             button_layout.addWidget(self.close_button)
             
             # Cancel button
             if self.cancellable:
-                self.cancel_button = QPushButton("Cancel")
+                self.cancel_button = QPushButton(self.get_translation('cancel', 'Cancel'))
                 self.cancel_button.clicked.connect(self.on_cancel)
                 button_layout.addWidget(self.cancel_button)
             
@@ -118,21 +135,33 @@ class ProgressDialog(QDialog):
                 return
                 
             logger.debug("Cancel button explicitly clicked by user")
-            self.user_cancelled = True  # Mark as explicitly cancelled by user
+            # Ask for confirmation
+            if not self.user_cancelled:
+                # Only show confirmation dialog if not already cancelled
+                confirm = QMessageBox.question(
+                    self, self.get_translation('confirm_cancel_title', 'Confirm Cancellation'), 
+                    self.get_translation('confirm_cancel_message', 'Are you sure you want to cancel the operation?'),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if confirm != QMessageBox.StandardButton.Yes:
+                    return
+                self.user_cancelled = True  # Mark as explicitly cancelled by user
             
             # Emit the cancelled signal to the worker
             self.cancelled.emit()
             
-            # Disable the cancel button
-            if hasattr(self, 'cancel_button'):
-                self.cancel_button.setEnabled(False)
-                
-            # Update the UI
-            self.update_operation("Cancelling operation...")
-            self.log_message("Cancellation requested by user. Waiting for operations to complete...")
+            # Update cancel button text
+            self.cancel_button.setText(self.get_translation('cancelling', 'Cancelling...'))
+            self.cancel_button.setEnabled(False)
             
-            # Automatically close after a reasonable timeout (5 seconds)
-            QTimer.singleShot(5000, self.accept)
+            # Log cancellation
+            self.log_message(self.get_translation('cancel_requested', 'Cancellation requested. Waiting for operation to complete...'))
+            self.update_operation(self.get_translation('cancelling_operation', 'Cancelling operation...'))
+            self.log_message(self.get_translation('cancel_requested_by_user', 'Cancellation requested by user. Waiting for operations to complete...'))
+            
+            # Automatically close dialog if user cancelled
+            QTimer.singleShot(5000, lambda: self.close_when_finished())
             
         except Exception as e:
             logger.error(f"Error in cancel handler: {str(e)}")
@@ -140,19 +169,28 @@ class ProgressDialog(QDialog):
     def closeEvent(self, event):
         """Override closeEvent to handle dialog closing."""
         try:
-            # If operation is complete, allow closing
-            if self.is_complete:
-                event.accept()
-                logger.debug("Progress dialog closed")
-            # Otherwise, treat as cancel if cancellable
-            elif self.cancellable:
-                self.on_cancel()
-                event.ignore()
+            # If user tries to close dialog, treat as cancellation
+            if self.cancellable and not self.is_complete:
+                # Ask for confirmation
+                confirm = QMessageBox.question(
+                    self, self.get_translation('confirm_cancel_title', 'Confirm Cancellation'), 
+                    self.get_translation('confirm_cancel_message', 'Are you sure you want to cancel the operation?'),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if confirm != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    logger.debug("Progress dialog close prevented - operation not cancelled")
+                    return
                 logger.debug("Progress dialog close attempted - treated as cancel")
             # If not cancellable, don't allow closing
-            else:
+            elif not self.cancellable:
                 event.ignore()
                 logger.debug("Progress dialog close prevented - operation not cancellable")
+            # If operation is complete, allow closing
+            else:
+                event.accept()
+                logger.debug("Progress dialog closed")
         except Exception as e:
             logger.error(f"Error in closeEvent: {str(e)}")
             event.accept()  # Allow closing on error
@@ -217,26 +255,16 @@ class ProgressDialog(QDialog):
                         # Calculate time per item and estimate remaining time
                         items_remaining = total - current
                         if items_remaining > 0 and elapsed_time > 0:
-                            avg_time_per_item = elapsed_time / self.processed_items
-                            estimated_time_remaining = items_remaining * avg_time_per_item
-                            
-                            # Format time as HH:MM:SS
-                            time_str = str(timedelta(seconds=int(estimated_time_remaining)))
-                            
-                            # Remove days from timedelta if present
-                            if 'day' in time_str:
-                                days, time_part = time_str.split(',')
-                                day_count = int(days.split()[0])
-                                hours, minutes, seconds = map(int, time_part.strip().split(':'))
-                                total_hours = day_count * 24 + hours
-                                time_str = f"{total_hours:02d}:{minutes:02d}:{seconds:02d}"
-                            
-                            # Update time label
-                            percent_complete = (current / total) * 100
-                            self.time_label.setText(f"Processing: {current} of {total} ({percent_complete:.1f}%) - Time remaining: {time_str}")
-                            self.time_label.setVisible(True)
+                            items_per_second = current / elapsed_time
+                            if items_per_second > 0:
+                                remaining_seconds = items_remaining / items_per_second
+                                
+                                # Format time remaining
+                                time_remaining = str(timedelta(seconds=int(remaining_seconds)))
+                                self.time_label.setText(self.get_translation('time_remaining', 'Time remaining: {time}').format(time=time_remaining))
+                                self.time_label.setVisible(True)
                     else:
-                        self.time_label.setText("Calculating time remaining...")
+                        self.time_label.setText(self.get_translation('calculating_time', 'Calculating time remaining...'))
                         self.time_label.setVisible(True)
                 
             # Update the display
@@ -323,7 +351,7 @@ class ProgressDialog(QDialog):
             if self.start_time is not None:
                 total_time = time.time() - self.start_time
                 time_str = str(timedelta(seconds=int(total_time)))
-                self.log_message(f"Total processing time: {time_str}")
+                self.log_message(self.get_translation('total_time', 'Total processing time: {time}').format(time=time_str))
             
             # Use invokeMethod to ensure UI update happens on the main thread
             QMetaObject.invokeMethod(self, "_close_when_finished_ui",
@@ -343,7 +371,7 @@ class ProgressDialog(QDialog):
             
             # Update time label to show completion
             if hasattr(self, 'time_label'):
-                self.time_label.setText("Processing complete")
+                self.time_label.setText(self.get_translation('processing_complete', 'Processing complete'))
             
             # Hide cancel button if present
             if self.cancellable and hasattr(self, 'cancel_button'):

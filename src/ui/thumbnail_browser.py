@@ -33,6 +33,21 @@ class ThumbnailBrowser(QWidget):
     batch_generate_requested = pyqtSignal(list)  # Signal emitted to request batch description generation
     status_message = pyqtSignal(str)  # Signal emitted to display status messages
     
+    def get_translation(self, section, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            section (str): Section in the translations
+            key (str): Key in the section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if self.language_manager:
+            return self.language_manager.get_translation(section, key, default)
+        return default
+    
     def __init__(self, db_manager, parent=None):
         """Initialize the thumbnail browser.
         
@@ -48,6 +63,15 @@ class ThumbnailBrowser(QWidget):
         self.current_catalog_id = None  # Current catalog being displayed
         self.thumbnails = {}  # Dictionary of thumbnail widgets by image_id
         self.selected_thumbnails = set()  # Set of selected thumbnail image_ids
+        
+        # Try to get language manager from parent window
+        self.language_manager = None
+        parent_widget = self
+        while parent_widget.parent() is not None:
+            parent_widget = parent_widget.parent()
+            if hasattr(parent_widget, 'language_manager'):
+                self.language_manager = parent_widget.language_manager
+                break
         
         # Initialize lazy thumbnail loader with multi-level caching
         # Determine optimal number of concurrent threads based on CPU cores
@@ -375,14 +399,32 @@ class ThumbnailBrowser(QWidget):
         num_selected = len(self.selected_thumbnails)
         
         # Menu actions
-        copy_action = menu.addAction(f"Copy to folder... ({num_selected} selected)" if num_selected > 1 else "Copy to folder...")
-        export_action = menu.addAction(f"Export with options... ({num_selected} selected)" if num_selected > 1 else "Export with options...")
-        open_action = menu.addAction(f"Open ({num_selected} selected)" if num_selected > 1 else "Open")
-        locate_action = menu.addAction(f"Locate on disk ({num_selected} selected)" if num_selected > 1 else "Locate on disk")
-        copy_image_action = menu.addAction(f"Copy image to clipboard ({num_selected} selected)" if num_selected > 1 else "Copy image to clipboard")
+        # Add debug logging to check language manager and translations
+        logger.debug(f"Language manager exists: {self.language_manager is not None}")
+        if self.language_manager:
+            logger.debug(f"Current language: {self.language_manager.current_language}")
+        
+        copy_text = self.get_translation('thumbnails', 'copy_to_folder', 'Copy to folder...')
+        export_text = self.get_translation('thumbnails', 'export_with_options', 'Export with options...')
+        open_text = self.get_translation('thumbnails', 'open', 'Open')
+        locate_text = self.get_translation('thumbnails', 'locate_on_disk', 'Locate on disk')
+        copy_image_text = self.get_translation('thumbnails', 'copy_to_clipboard', 'Copy image to clipboard')
+        selected_suffix = self.get_translation('thumbnails', 'selected_suffix', '({} selected)')
+        
+        # Log translations for debugging
+        logger.debug(f"Translation for copy_to_folder: {copy_text}")
+        logger.debug(f"Translation for export_with_options: {export_text}")
+        logger.debug(f"Translation for open: {open_text}")
+        
+        copy_action = menu.addAction(f"{copy_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else copy_text)
+        export_action = menu.addAction(f"{export_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else export_text)
+        open_action = menu.addAction(f"{open_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else open_text)
+        locate_action = menu.addAction(f"{locate_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else locate_text)
+        copy_image_action = menu.addAction(f"{copy_image_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else copy_image_text)
         
         # Add catalog-related actions
-        catalog_menu = QMenu(f"Add to Catalog ({num_selected} selected)" if num_selected > 1 else "Add to Catalog")
+        add_to_catalog_text = self.get_translation('thumbnails', 'add_to_catalog', 'Add to Catalog')
+        catalog_menu = QMenu(f"{add_to_catalog_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else add_to_catalog_text)
         
         # Get all catalogs
         catalogs = self.db_manager.get_catalogs()
@@ -398,25 +440,32 @@ class ThumbnailBrowser(QWidget):
             catalog_menu.addSeparator()
         
         # Add "New Catalog..." option
-        new_catalog_action = catalog_menu.addAction("New Catalog...")
+        new_catalog_action = catalog_menu.addAction(self.get_translation('thumbnails', 'new_catalog', 'New Catalog...'))
         
         # Add the catalog submenu to the main menu
         menu.addMenu(catalog_menu)
         
         # Add "Remove from Catalog" option if we're viewing a catalog
         if self.current_catalog_id is not None:
-            remove_from_catalog_action = menu.addAction("Remove from Catalog")
+            remove_from_catalog_action = menu.addAction(self.get_translation('thumbnails', 'remove_from_catalog', 'Remove from Catalog'))
         
         # Add description-related actions
         menu.addSeparator()
-        edit_action = menu.addAction(f"Edit description ({num_selected} selected)" if num_selected > 1 else "Edit description")
-        generate_desc_action = menu.addAction(f"Generate AI description ({num_selected} selected)" if num_selected > 1 else "Generate AI description")
-        delete_desc_action = menu.addAction(f"Delete description ({num_selected} selected)" if num_selected > 1 else "Delete description")
+        edit_desc_text = self.get_translation('thumbnails', 'edit_description', 'Edit description')
+        generate_desc_text = self.get_translation('thumbnails', 'generate_description', 'Generate AI description')
+        delete_desc_text = self.get_translation('thumbnails', 'delete_description', 'Delete description')
+        
+        edit_action = menu.addAction(f"{edit_desc_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else edit_desc_text)
+        generate_desc_action = menu.addAction(f"{generate_desc_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else generate_desc_text)
+        delete_desc_action = menu.addAction(f"{delete_desc_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else delete_desc_text)
         
         # Add delete actions with separator
         menu.addSeparator()
-        delete_db_action = menu.addAction(f"Delete from database ({num_selected} selected)" if num_selected > 1 else "Delete from database")
-        delete_full_action = menu.addAction(f"Delete from database and disk ({num_selected} selected)" if num_selected > 1 else "Delete from database and disk")
+        delete_db_text = self.get_translation('thumbnails', 'delete_from_db', 'Delete from database')
+        delete_full_text = self.get_translation('thumbnails', 'delete_from_db_and_disk', 'Delete from database and disk')
+        
+        delete_db_action = menu.addAction(f"{delete_db_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else delete_db_text)
+        delete_full_action = menu.addAction(f"{delete_full_text} {selected_suffix.format(num_selected)}" if num_selected > 1 else delete_full_text)
         
         # Show menu and get selected action
         action = menu.exec(position)
@@ -866,8 +915,8 @@ class ThumbnailBrowser(QWidget):
             main_window.task_manager.start_task(
                 task_id=f"{operation}_images_{id(self)}",
                 fn=copy_images_task,
-                images=images_to_copy,
-                destination=dest_folder,
+                images=images,
+                destination=destination,
                 progress_callback=progress_callback,
                 on_result=on_task_complete,
                 on_error=on_task_error
@@ -882,39 +931,115 @@ class ThumbnailBrowser(QWidget):
         """Open selected images with the default system application."""
         if not self.selected_thumbnails:
             return
-        
-        import subprocess
             
-        # Open each selected image with the default program
-        for image_id in self.selected_thumbnails:
-            try:
-                # Get image information from database
-                image_info = self.db_manager.get_image_by_id(image_id)
+        # Get image information for all selected thumbnails
+        image_ids = list(self.selected_thumbnails)
+        
+        for image_id in image_ids:
+            image_info = self.db_manager.get_image_by_id(image_id)
+            if image_info and os.path.exists(image_info['full_path']):
+                # Use the appropriate method to open the file with the default application
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(image_info['full_path'])
+                    elif os.name == 'posix':  # macOS, Linux
+                        if sys.platform == 'darwin':  # macOS
+                            subprocess.call(('open', image_info['full_path']))
+                        else:  # Linux
+                            subprocess.call(('xdg-open', image_info['full_path']))
+                except Exception as e:
+                    logger.error(f"Error opening file {image_info['full_path']}: {e}")
+                    QMessageBox.warning(
+                        self,
+                        "Error Opening File",
+                        f"Could not open {image_info['filename']}. Error: {str(e)}"
+                    )
+    
+    def locate_selected_images_on_disk(self):
+        """Locate selected images in the file explorer."""
+        if not self.selected_thumbnails:
+            return
+            
+        # Get image information for all selected thumbnails
+        image_ids = list(self.selected_thumbnails)
+        
+        for image_id in image_ids:
+            image_info = self.db_manager.get_image_by_id(image_id)
+            if image_info and os.path.exists(image_info['full_path']):
+                # Get the directory containing the file
+                file_dir = os.path.dirname(image_info['full_path'])
                 
-                if not image_info or 'full_path' not in image_info:
-                    continue
-                    
-                image_path = image_info.get('full_path')
+                # Open the file explorer and select the file
+                try:
+                    if os.name == 'nt':  # Windows
+                        # Use explorer to open the folder and select the file
+                        subprocess.run(['explorer', '/select,', os.path.normpath(image_info['full_path'])])
+                    elif os.name == 'posix':  # macOS, Linux
+                        if sys.platform == 'darwin':  # macOS
+                            # On macOS, open the folder in Finder
+                            subprocess.call(['open', file_dir])
+                        else:  # Linux
+                            # On Linux, open the folder in the default file manager
+                            subprocess.call(['xdg-open', file_dir])
+                except Exception as e:
+                    logger.error(f"Error locating file {image_info['full_path']}: {e}")
+                    QMessageBox.warning(
+                        self,
+                        "Error Locating File",
+                        f"Could not locate {image_info['filename']} in file explorer. Error: {str(e)}"
+                    )
+    
+    def copy_selected_images_to_clipboard(self):
+        """Copy selected images to clipboard."""
+        if not self.selected_thumbnails:
+            return
+            
+        # We can only copy one image to clipboard at a time
+        # If multiple images are selected, use the first one
+        image_id = next(iter(self.selected_thumbnails))
+        image_info = self.db_manager.get_image_by_id(image_id)
+        
+        if not image_info or not os.path.exists(image_info['full_path']):
+            QMessageBox.warning(
+                self,
+                "Copy Failed",
+                "Could not find the selected image file."
+            )
+            return
+            
+        try:
+            # Load the image using QImage
+            image_path = image_info['full_path']
+            qimage = QImage(image_path)
+            
+            if qimage.isNull():
+                QMessageBox.warning(
+                    self,
+                    "Copy Failed",
+                    f"Could not load image: {image_info['filename']}"
+                )
+                return
                 
-                # Check if file exists
-                if not os.path.exists(image_path):
-                    logger.warning(f"File not found: {image_path}")
-                    continue
-                
-                # Open with default application
-                if os.name == 'nt':  # Windows
-                    os.startfile(image_path)
-                else:  # Linux/Mac
-                    subprocess.call(['xdg-open', image_path])
-                    
-            except Exception as e:
-                logger.error(f"Error opening image {image_id}: {e}")
+            # Create a pixmap from the image and copy to clipboard
+            pixmap = QPixmap.fromImage(qimage)
+            QApplication.clipboard().setPixmap(pixmap)
+            
+            # Show success message
+            self.status_message.emit(f"Copied image to clipboard: {image_info['filename']}")
+            
+        except Exception as e:
+            logger.error(f"Error copying image to clipboard: {e}")
+            QMessageBox.warning(
+                self,
+                "Copy Failed",
+                f"Could not copy image to clipboard. Error: {str(e)}"
+            )
     
     def edit_selected_descriptions(self):
         """Edit descriptions for selected images."""
         if not self.selected_thumbnails:
             return
-        
+            
         # If only one image is selected
         if len(self.selected_thumbnails) == 1:
             image_id = next(iter(self.selected_thumbnails))
@@ -942,6 +1067,60 @@ class ThumbnailBrowser(QWidget):
             # TODO: Implement batch description editing
             pass
     
+    def generate_descriptions_for_selected(self):
+        """Generate AI descriptions for selected images."""
+        if not self.selected_thumbnails:
+            return
+            
+        # Get image IDs for selected thumbnails
+        image_ids = list(self.selected_thumbnails)
+        
+        # Check if we have any images to process
+        if not image_ids:
+            return
+            
+        # Confirm generation
+        num_selected = len(image_ids)
+        confirm = QMessageBox.question(
+            self,
+            self.get_translation('thumbnails', 'confirm_generation_title', "Confirm Generation"),
+            self.get_translation('thumbnails', 'confirm_description_generation', "Generate AI descriptions for {} selected image{}?").format(
+                num_selected,
+                's' if num_selected > 1 else ''
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+            
+        # Verify that the selected images exist
+        valid_image_ids = []
+        for image_id in image_ids:
+            image_info = self.db_manager.get_image_by_id(image_id)
+            if image_info and os.path.exists(image_info['full_path']):
+                valid_image_ids.append(image_id)  # Only pass the ID, not the entire image_info dictionary
+        
+        if not valid_image_ids:
+            QMessageBox.warning(
+                self,
+                "Generation Failed",
+                "No valid images selected for description generation."
+            )
+            return
+            
+        # Emit signal to request batch generation with just the image IDs
+        # This will be handled by the main window or another component
+        self.batch_generate_requested.emit(valid_image_ids)
+        
+        # Show status message
+        msg_template = self.get_translation('thumbnails', 'descriptions_generation_started', "Started AI description generation for {} image{}")
+        self.status_message.emit(msg_template.format(
+            len(valid_image_ids),
+            's' if len(valid_image_ids) != 1 else ''
+        ))
+    
     def delete_selected_descriptions(self):
         """Delete descriptions for selected images."""
         if not self.selected_thumbnails:
@@ -950,182 +1129,98 @@ class ThumbnailBrowser(QWidget):
         # Confirm deletion
         num_selected = len(self.selected_thumbnails)
         confirm = QMessageBox.question(
-            self, "Confirm Delete Description", 
-            f"Are you sure you want to delete the description{'s' if num_selected > 1 else ''} for {num_selected} selected image{'s' if num_selected > 1 else ''}?",
+            self,
+            self.get_translation('thumbnails', 'confirm_deletion_title', "Confirm Deletion"),
+            self.get_translation('thumbnails', 'confirm_description_deletion', "Delete descriptions for {} selected image{}?").format(
+                num_selected,
+                's' if num_selected > 1 else ''
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
         
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        
+            
         # Delete descriptions for each selected image
-        for image_id in list(self.selected_thumbnails):
-            # Clear both AI and user descriptions
-            self.db_manager.update_image_description(image_id, ai_description="", user_description="")
-            
-        # Refresh the display to show the changes
-        self.refresh()
-        
-        # Show confirmation message
-        self.status_message.emit(f"Description{'s' if num_selected > 1 else ''} deleted for {num_selected} image{'s' if num_selected > 1 else ''}")
-    
-    def locate_selected_images_on_disk(self):
-        """Open file explorer showing the location of the selected images."""
-        if not self.selected_thumbnails:
-            return
-            
-        import subprocess
-        
-        # Open location for each selected image
+        success_count = 0
         for image_id in self.selected_thumbnails:
-            try:
-                # Get image information from database
-                image_info = self.db_manager.get_image_by_id(image_id)
+            # Pass both ai_description and user_description as empty strings to clear both
+            if self.db_manager.update_image_description(image_id, ai_description="", user_description=""):
+                success_count += 1
                 
-                if not image_info or 'full_path' not in image_info:
-                    continue
-                    
-                image_path = image_info.get('full_path')
-                
-                # Check if file exists
-                if not os.path.exists(image_path):
-                    logger.warning(f"File not found: {image_path}")
-                    continue
-                
-                # Make sure we have an absolute path
-                absolute_path = os.path.abspath(image_path)
-                logger.info(f"Attempting to locate image: {absolute_path}")
-                
-                # Open file explorer with file selected
-                if os.name == 'nt':  # Windows
-                    try:
-                        # Use shell=True approach with properly quoted path
-                        cmd = f'explorer /select,"{absolute_path}"'
-                        logger.info(f"Running command: {cmd}")
-                        subprocess.run(cmd, shell=True)
-                    except Exception as e:
-                        logger.error(f"Error with explorer command: {e}")
-                        # Fallback to opening the containing folder
-                        folder_path = os.path.dirname(absolute_path)
-                        logger.info(f"Falling back to opening folder: {folder_path}")
-                        subprocess.run(["explorer", folder_path])
-                else:  # Linux/Mac
-                    # Open the containing folder
-                    folder_path = os.path.dirname(absolute_path)
-                    subprocess.call(['xdg-open', folder_path])
-                    
-            except Exception as e:
-                logger.error(f"Error locating image {image_id} on disk: {e}")
-    
-    def copy_selected_images_to_clipboard(self):
-        """Copy selected image(s) to the clipboard."""
-        if not self.selected_thumbnails:
-            return
-            
-        from PyQt6.QtGui import QImage, QPixmap
-        from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+                # Update thumbnail widget if it exists
+                if image_id in self.thumbnails:
+                    self.thumbnails[image_id].description = ""
         
-        # We can only copy one image to clipboard
-        # If multiple are selected, use the first one
-        image_id = next(iter(self.selected_thumbnails))
-        
+        # Show status message
+        msg_template = self.get_translation('thumbnails', 'descriptions_deleted', "Deleted descriptions for {} image{}")
+        # Make sure we're only passing the exact number of arguments needed for the format string
+        # Check the template to see how many placeholders it has
         try:
-            # Get image information from database
-            image_info = self.db_manager.get_image_by_id(image_id)
-            
-            if not image_info or 'full_path' not in image_info:
-                return
-                
-            image_path = image_info.get('full_path')
-            
-            # Check if file exists
-            if not os.path.exists(image_path):
-                logger.warning(f"File not found: {image_path}")
-                return
-            
-            # Load the image
-            pixmap = QPixmap(image_path)
-            if not pixmap.isNull():
-                # Get the application clipboard
-                clipboard = QApplication.clipboard()
-                # Set the pixmap as the clipboard content
-                clipboard.setPixmap(pixmap)
-                logger.info(f"Copied image {image_id} to clipboard")
-                
-                # Show status message via main application
-                message = "First selected image copied to clipboard" if len(self.selected_thumbnails) > 1 else "Image copied to clipboard"
-                logger.info(message)
-                try:
-                    # Use signal if connected, otherwise just log
-                    self.status_message.emit(message)
-                except Exception:
-                    # Signal might not be connected yet
-                    pass
-            else:
-                error_msg = f"Error loading image {image_id} for clipboard"
-                logger.error(error_msg)
-                try:
-                    self.status_message.emit("Error copying image to clipboard")
-                except Exception:
-                    pass
-                
-        except Exception as e:
-            error_msg = f"Error copying image {image_id} to clipboard: {e}"
-            logger.error(error_msg)
-            try:
-                self.status_message.emit(f"Error copying image to clipboard")
-            except Exception:
-                pass
-        
-        # Refresh display
-        self.refresh()
+            self.status_message.emit(msg_template.format(
+                success_count,
+                's' if success_count != 1 else ''
+            ))
+        except IndexError:
+            # Fallback in case the translation has a different number of placeholders
+            self.status_message.emit(f"Deleted descriptions for {success_count} image{'s' if success_count != 1 else ''}")
     
     def delete_selected_images(self, delete_from_disk=False):
-        """Delete selected images.
+        """Delete selected images from database and optionally from disk.
         
         Args:
-            delete_from_disk (bool): If True, also delete the image file from disk
+            delete_from_disk (bool): If True, also delete image files from disk
         """
         if not self.selected_thumbnails:
             return
-        
-        # Confirm deletion with appropriate warning
+            
+        # Confirm deletion
         num_selected = len(self.selected_thumbnails)
         if delete_from_disk:
-            message = f"WARNING: This will permanently delete {num_selected} selected image{'s' if num_selected > 1 else ''} from both the database AND your disk. This action cannot be undone.\n\nDo you want to continue?"
-            title = "Confirm Permanent Deletion"
+            confirm_key = 'confirm_full_deletion'
+            default_msg = "Delete {} selected image{} from database AND disk? This cannot be undone!"
         else:
-            message = f"Are you sure you want to remove {num_selected} selected image{'s' if num_selected > 1 else ''} from the database? The original files will remain on disk."
-            title = "Confirm Database Removal"
-        
+            confirm_key = 'confirm_db_deletion'
+            default_msg = "Delete {} selected image{} from database? The image files will remain on disk."
+            
         confirm = QMessageBox.question(
-            self, title, message,
+            self,
+            self.get_translation('thumbnails', 'confirm_deletion_title', "Confirm Deletion"),
+            self.get_translation('thumbnails', confirm_key, default_msg).format(
+                num_selected,
+                's' if num_selected > 1 else ''
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
         
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        
-        # Track statistics for status message
-        deleted_count = 0
-        disk_deleted_count = 0
-        error_count = 0
-        
+            
         # Delete each selected image
+        success_count = 0
         for image_id in list(self.selected_thumbnails):
-            # Get image path first (we need it for disk deletion)
-            image_info = self.db_manager.get_image_by_id(image_id)
-            original_path = image_info.get("full_path") if image_info else None
+            # Get image path before deleting from database if we need to delete from disk
+            image_path = None
+            if delete_from_disk:
+                image_info = self.db_manager.get_image_by_id(image_id)
+                if image_info:
+                    image_path = image_info.get('path')
             
             # Delete from database
-            result = self.db_manager.delete_image(image_id)
-            
-            if result:
-                deleted_count += 1
+            if self.db_manager.delete_image(image_id):
+                success_count += 1
                 
-                # Remove thumbnail from UI
+                # Delete from disk if requested
+                if delete_from_disk and image_path and os.path.exists(image_path):
+                    try:
+                        os.remove(image_path)
+                        logger.info(f"Deleted image file: {image_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete image file {image_path}: {e}")
+                
+                # Remove from UI
                 if image_id in self.thumbnails:
                     thumbnail = self.thumbnails[image_id]
                     self.grid_layout.removeWidget(thumbnail)
@@ -1134,41 +1229,17 @@ class ThumbnailBrowser(QWidget):
                 
                 # Remove from selection
                 self.selected_thumbnails.discard(image_id)
-                
-                # Delete from disk if requested
-                if delete_from_disk and original_path and os.path.exists(original_path):
-                    try:
-                        os.remove(original_path)
-                        disk_deleted_count += 1
-                        logger.info(f"Deleted file from disk: {original_path}")
-                    except Exception as e:
-                        logger.error(f"Error deleting file from disk: {original_path} - {e}")
-                        error_count += 1
-            else:
-                error_count += 1
         
         # Show status message
         if delete_from_disk:
-            self.status_message.emit(f"Deleted {deleted_count} images from database, {disk_deleted_count} from disk" + 
-                                    (f", {error_count} errors" if error_count > 0 else ""))
+            msg_template = self.get_translation('thumbnails', 'images_deleted_full', "Deleted {} image{} from database and disk")
         else:
-            self.status_message.emit(f"Deleted {deleted_count} images from database" + 
-                                    (f", {error_count} errors" if error_count > 0 else ""))
-        
-        # Refresh display
-        self.refresh()
-        
-    def generate_descriptions_for_selected(self):
-        """Generate AI descriptions for selected images."""
-        if not self.selected_thumbnails:
-            return
+            msg_template = self.get_translation('thumbnails', 'images_deleted_db', "Deleted {} image{} from database")
             
-        # Convert selected thumbnails to a list to ensure proper signal emission
-        selected_ids = list(self.selected_thumbnails)
-        
-        # Emit signal for the main window to handle generation
-        # This will be connected to the batch generate descriptions method
-        self.batch_generate_requested.emit(selected_ids)
+        self.status_message.emit(msg_template.format(
+            success_count,
+            's' if success_count != 1 else ''
+        ))
     
     def set_catalog(self, catalog_id):
         """Display thumbnails for the specified catalog.
@@ -1176,32 +1247,25 @@ class ThumbnailBrowser(QWidget):
         Args:
             catalog_id (int): ID of the catalog to display
         """
-        logger.info(f"Setting catalog: {catalog_id}")
-        self.clear_thumbnails()
-        
-        # Save catalog ID and clear folder ID and search query
-        self.current_catalog_id = catalog_id
+        # Store current catalog ID
         self.current_folder_id = None
         self.current_search_query = None
-
-        # Get catalog name
-        catalog_info = self.db_manager.get_catalog_by_id(catalog_id)
-        catalog_name = catalog_info.get("name", "Unknown") if catalog_info else "Unknown"
+        self.current_catalog_id = catalog_id
         
-        # Load thumbnails for the catalog
+        # Get catalog info
+        catalog = self.db_manager.get_catalog_by_id(catalog_id)
+        if not catalog:
+            return
+            
+        # Get images in catalog
         images = self.db_manager.get_images_for_catalog(catalog_id)
         
-        # Update header label to show catalog
-        self.header_label.setText(f"Catalog: {catalog_name}")
-        
-        # Add thumbnails
+        # Clear and add thumbnails
+        self.clear_thumbnails()
         self.add_thumbnails(images)
-        
-        # Inform user
-        self.status_message.emit(f"Loaded {len(images)} image{'s' if len(images) != 1 else ''} from catalog '{catalog_name}'")
-
+    
     def add_to_catalog(self, catalog_id):
-        """Add selected images to a catalog.
+        """Add selected images to the specified catalog.
         
         Args:
             catalog_id (int): ID of the catalog to add images to
@@ -1221,7 +1285,12 @@ class ThumbnailBrowser(QWidget):
                 success_count += 1
                 
         # Show status message
-        self.status_message.emit(f"Added {success_count} image{'s' if success_count != 1 else ''} to catalog '{catalog['name']}'")
+        msg_template = self.get_translation('thumbnails', 'images_added_to_catalog', "Added {} image{} to catalog '{}'")
+        self.status_message.emit(msg_template.format(
+            success_count,
+            's' if success_count != 1 else '',
+            catalog['name']
+        ))
     
     def add_to_new_catalog(self):
         """Create a new catalog and add selected images to it."""
@@ -1230,7 +1299,9 @@ class ThumbnailBrowser(QWidget):
             
         # Prompt for catalog name
         catalog_name, ok = QInputDialog.getText(
-            self, "New Catalog", "Enter a name for the new catalog:"
+            self, 
+            self.get_translation('thumbnails', 'new_catalog_title', "New Catalog"), 
+            self.get_translation('thumbnails', 'new_catalog_prompt', "Enter a name for the new catalog:")
         )
         
         if not ok or not catalog_name.strip():
@@ -1248,7 +1319,11 @@ class ThumbnailBrowser(QWidget):
         catalog_id = self.db_manager.create_catalog(catalog_name, catalog_desc)
         
         if not catalog_id:
-            QMessageBox.warning(self, "Error", "Failed to create catalog")
+            QMessageBox.warning(
+                self, 
+                self.get_translation('common', 'error', "Error"), 
+                self.get_translation('thumbnails', 'create_catalog_failed', "Failed to create catalog")
+            )
             return
             
         # Add selected images to the catalog
@@ -1258,7 +1333,12 @@ class ThumbnailBrowser(QWidget):
                 success_count += 1
                 
         # Show status message
-        self.status_message.emit(f"Created catalog '{catalog_name}' and added {success_count} image{'s' if success_count != 1 else ''}")
+        msg_template = self.get_translation('thumbnails', 'catalog_created', "Created catalog '{}' and added {} image{}")
+        self.status_message.emit(msg_template.format(
+            catalog_name,
+            success_count,
+            's' if success_count != 1 else ''
+        ))
     
     def remove_from_catalog(self):
         """Remove selected images from the current catalog."""
@@ -1272,10 +1352,32 @@ class ThumbnailBrowser(QWidget):
             
         # Confirm removal
         num_selected = len(self.selected_thumbnails)
+        
+        # Get the translation template with placeholders
+        template = self.get_translation('thumbnails', 'confirm_catalog_removal', 
+                                      "Remove {0} selected image{1} from catalog '{2}'?")
+        
+        # Check if we're using the German translation which has 4 placeholders
+        if template.count('{}') == 4:
+            # German format: "{} ausgewählte{} Bild{} aus Katalog '{}' entfernen?"
+            translated_message = template.format(
+                num_selected,
+                '' if num_selected == 1 else 's',  # German adjective ending
+                '' if num_selected == 1 else 'er',  # German plural for Bild/Bilder
+                catalog['name']
+            )
+        else:
+            # Default format with 3 placeholders
+            translated_message = template.format(
+                num_selected,
+                's' if num_selected > 1 else '',
+                catalog['name']
+            )
+        
         confirm = QMessageBox.question(
             self,
-            "Confirm Removal",
-            f"Remove {num_selected} selected image{'s' if num_selected > 1 else ''} from catalog '{catalog['name']}'?",
+            self.get_translation('thumbnails', 'confirm_removal_title', "Confirm Removal"),
+            translated_message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -1301,7 +1403,28 @@ class ThumbnailBrowser(QWidget):
                     self.selected_thumbnails.discard(image_id)
         
         # Show status message
-        self.status_message.emit(f"Removed {success_count} image{'s' if success_count != 1 else ''} from catalog '{catalog['name']}'")
+        # Get the translation template with placeholders
+        template = self.get_translation('thumbnails', 'images_removed_from_catalog', 
+                                      "Removed {0} image{1} from catalog '{2}'")
+        
+        # Check if we're using the German translation which might have 4 placeholders
+        if template.count('{}') == 4:
+            # German format might be similar to the confirmation dialog
+            translated_status = template.format(
+                success_count,
+                '' if success_count == 1 else 's',  # German adjective ending
+                '' if success_count == 1 else 'er',  # German plural for Bild/Bilder
+                catalog['name']
+            )
+        else:
+            # Default format with 3 placeholders
+            translated_status = template.format(
+                success_count,
+                's' if success_count > 1 else '',
+                catalog['name']
+            )
+        
+        self.status_message.emit(translated_status)
         
         # Refresh if we're viewing the catalog
         if self.current_catalog_id is not None:

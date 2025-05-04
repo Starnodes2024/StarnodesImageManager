@@ -1,0 +1,144 @@
+{
+  "name": "Dark Rose",
+  "version": "1.0",
+  "author": "STARNODES",
+  "colors": {
+    "window": {
+      "background": "#1a1216",
+      "text": "#ffffff",
+      "border": "#2a1e24"
+    },
+    "menuBar": {
+      "background": "#2a1e24",
+      "text": "#ffffff",
+      "hover": "#3d2a35",
+      "border": "#3d2a35"
+    },
+    "toolbar": {
+      "background": "#2a1e24",
+      "text": "#ffffff",
+      "hover": "#3d2a35",
+      "border": "#3d2a35"
+    },
+    "panel": {
+      "background": "#221a1f",
+      "text": "#ffffff",
+      "border": "#3d2a35",
+      "header": "#2a1e24"
+    },
+    "thumbnail": {
+      "background": "#2a1e24",
+      "text": "#ffffff",
+      "textSecondary": "#cccccc",
+      "selected": "#9c3662",
+      "selectedText": "#ffffff",
+      "border": "#3d2a35",
+      "shadow": "#110c0f"
+    },
+    "button": {
+      "background": "#3d2a35",
+      "text": "#ffffff",
+      "hover": "#4e3644",
+      "pressed": "#1a1216",
+      "border": "#5f4253"
+    },
+    "input": {
+      "background": "#2a1e24",
+      "text": "#ffffff",
+      "placeholder": "#aaaaaa",
+      "border": "#3d2a35",
+      "focus": "#9c3662"
+    },
+    "scrollBar": {
+      "background": "#1a1216",
+      "handle": "#3d2a35",
+      "handleHover": "#4e3644"
+    },
+    "statusBar": {
+      "background": "#1a1216",
+      "text": "#dddddd",
+      "border": "#2a1e24"
+    },
+    "dialog": {
+      "background": "#221a1f",
+      "text": "#ffffff",
+      "border": "#3d2a35",
+      "header": "#2a1e24"
+    },
+    "progressBar": {
+      "background": "#2a1e24",
+      "progress": "#c74b81",
+      "text": "#ffffff"
+    },
+    "link": {
+      "text": "#e86c9d",
+      "hover": "#f87cad",
+      "visited": "#cc99bb"
+    },
+    "error": {
+      "text": "#ff6666",
+      "background": "#552222"
+    },
+    "warning": {
+      "text": "#ffaa66",
+      "background": "#553322"
+    },
+    "success": {
+      "text": "#66dd66",
+      "background": "#225522"
+    },
+    "banner": {
+      "background": "#141417",
+      "text": "#ffffff",
+      "linkText": "#78aeff",
+      "linkHover": "#99ccff"
+    }
+  },
+  "fonts": {
+    "main": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "header": {
+      "family": "Segoe UI",
+      "size": 12,
+      "weight": "bold",
+      "style": "normal"
+    },
+    "title": {
+      "family": "Segoe UI",
+      "size": 14,
+      "weight": "bold",
+      "style": "normal"
+    },
+    "description": {
+      "family": "Segoe UI",
+      "size": 9,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "button": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "input": {
+      "family": "Segoe UI",
+      "size": 10,
+      "weight": "normal",
+      "style": "normal"
+    },
+    "statusBar": {
+      "family": "Segoe UI",
+      "size": 9,
+      "weight": "normal",
+      "style": "normal"
+    }
+  },
+  "paths": {
+    "banner": "banner.png"
+  }
+}

@@ -32,7 +32,7 @@ class ThemeManager(QObject):
         self.designs_dir = None
         
         # Default theme ID in case no theme is loaded
-        self.default_theme_id = "light"
+        self.default_theme_id = "dark_purple"
     
     def initialize(self, app_dir=None):
         """Initialize the theme manager and load themes.
@@ -61,7 +61,7 @@ class ThemeManager(QObject):
             # Get current theme from config or use default
             if self.config_manager:
                 # First try to get theme from the app section (where it's defined in default config)
-                self.current_theme_id = self.config_manager.get("app", "theme", self.default_theme_id)
+                self.current_theme_id = self.config_manager.get("ui", "theme", self.default_theme_id)
                 # For backward compatibility, also check the ui section
                 if self.current_theme_id == self.default_theme_id:
                     self.current_theme_id = self.config_manager.get("ui", "theme", self.default_theme_id)

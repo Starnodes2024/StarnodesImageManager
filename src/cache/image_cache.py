@@ -51,25 +51,23 @@ class ImageCacheItem:
         Returns:
             dict: Serializable representation
         """
-        # Convert QPixmap to bytes
-        pixmap_data = None
-        if self.pixmap is not None and not self.pixmap.isNull():
-            ba = QByteArray()
-            buffer = QBuffer(ba)
-            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            self.pixmap.save(buffer, "PNG")
-            pixmap_data = bytes(ba.data())
+        # We don't serialize QPixmap objects to avoid pickling errors
+        # Only store metadata and path information
         
         # Convert PIL image to bytes if present
         pil_data = None
         if self.pil_image is not None:
-            img_io = io.BytesIO()
-            self.pil_image.save(img_io, format='PNG')
-            pil_data = img_io.getvalue()
+            try:
+                img_io = io.BytesIO()
+                self.pil_image.save(img_io, format='PNG')
+                pil_data = img_io.getvalue()
+            except Exception as e:
+                logger.error(f"Error serializing PIL image: {e}")
+                pil_data = None
         
         return {
             'image_id': self.image_id,
-            'pixmap_data': pixmap_data,
+            'pixmap_data': None,  # Don't store pixmap data
             'pil_data': pil_data,
             'path': self.path,
             'metadata': self.metadata,
@@ -183,20 +181,25 @@ class ImageCache:
         if pixmap is None or pixmap.isNull():
             return False
         
-        # Create cache item
+        # Add to memory-only cache (this is safe and doesn't use pickle)
+        self._add_to_pixmap_cache(image_id, pixmap)
+        
+        # Only store metadata in the disk cache, not the actual pixmap
+        # to avoid pickling errors
         cache_item = ImageCacheItem(
             image_id=image_id,
-            pixmap=pixmap,
+            pixmap=None,  # Don't store pixmap in the serialized item
             path=path,
             metadata=metadata
         )
         
-        # Add to memory-only cache
-        self._add_to_pixmap_cache(image_id, pixmap)
-        
-        # Add to multi-level cache
+        # Add metadata to multi-level cache
         key = f"thumbnail:{image_id}"
-        return self.cache_manager.put(key, cache_item)
+        try:
+            return self.cache_manager.put(key, cache_item)
+        except Exception as e:
+            logger.error(f"Error caching thumbnail metadata: {e}")
+            return False
     
     def get_image(self, image_id):
         """Get a full image from cache.

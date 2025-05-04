@@ -178,9 +178,10 @@ class ConfigManager:
     def save(self):
         """Save configuration to file."""
         try:
+            logger.info(f"Saving configuration to: {self.config_file}")  # ADDED for debug
             with open(self.config_file, "w") as f:
                 json.dump(self.config, f, indent=4)
-            
+        
             logger.info("Configuration saved successfully")
             return True
         

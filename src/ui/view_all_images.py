@@ -86,7 +86,7 @@ def add_view_all_images_to_main_window(main_window):
                 
             # Update window title
             if hasattr(self, 'setWindowTitle'):
-                self.setWindowTitle("Star Image Browse - All Images")
+                self.setWindowTitle("STARNODES Image Manager - All Images")
                 
         except Exception as e:
             logger.error(f"Error viewing all images: {e}")

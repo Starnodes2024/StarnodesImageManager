@@ -564,16 +564,30 @@ def rebuild_database(db_path):
         logger.info(f"Recovered {recovered_stats['folders']} folders and {recovered_stats['images']} images")
         
         # Replace corrupted database with new one
-        try:
-            if os.path.exists(db_path):
-                os.remove(db_path)
-            shutil.copy2(new_db_path, db_path)
-            os.remove(new_db_path)
-            logger.info("Replaced corrupted database with rebuilt one")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to replace corrupted database: {e}")
-            return False
+        max_retries = 3
+        retry_delay = 1.0  # seconds
+        
+        for retry in range(max_retries):
+            try:
+                if os.path.exists(db_path):
+                    os.remove(db_path)
+                shutil.copy2(new_db_path, db_path)
+                os.remove(new_db_path)
+                logger.info("Replaced corrupted database with rebuilt one")
+                return True
+            except PermissionError as e:
+                # File is likely locked by another process
+                logger.warning(f"Database file is locked, retrying in {retry_delay} seconds (attempt {retry+1}/{max_retries}): {e}")
+                time.sleep(retry_delay)
+                # Increase delay for next retry
+                retry_delay *= 1.5
+            except Exception as e:
+                logger.error(f"Failed to replace corrupted database with repaired one: {e}")
+                return False
+        
+        # If we get here, all retries failed
+        logger.error(f"Failed to replace corrupted database after {max_retries} attempts")
+        return False
             
     except Exception as e:
         logger.error(f"Failed to rebuild database: {e}")

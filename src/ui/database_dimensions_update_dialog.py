@@ -20,29 +20,45 @@ logger = logging.getLogger("StarImageBrowse.ui.database_dimensions_update_dialog
 class DatabaseDimensionsUpdateDialog(QDialog):
     """Dialog for updating image dimensions in the database."""
     
-    def __init__(self, parent, db_manager, enhanced_search):
+    def __init__(self, parent, db_manager, enhanced_search, language_manager=None):
         """Initialize the dialog.
         
         Args:
             parent: Parent widget
             db_manager: Database manager instance
             enhanced_search: Enhanced search instance
+            language_manager: Language manager instance
         """
         super().__init__(parent)
         self.db_manager = db_manager
         self.enhanced_search = enhanced_search
+        self.language_manager = language_manager
         self.updater = ImageDimensionsUpdater(db_manager, enhanced_search)
         self.setup_ui()
         
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the dimensions_update section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('dimensions_update', key, default)
+        return default
+    
     def setup_ui(self):
         """Set up the dialog UI."""
-        self.setWindowTitle("Update Image Dimensions")
+        self.setWindowTitle(self.get_translation('dialog_title', 'Update Image Dimensions'))
         self.setMinimumWidth(500)
         
         layout = QVBoxLayout(self)
         
         # Info label
-        info_text = (
+        info_text = self.get_translation('info_text',
             "This tool will scan image files and update width and height information in the database. "
             "This data is needed for dimension-based searching.\n\n"
             "Choose which images to update:"
@@ -52,20 +68,20 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         layout.addWidget(info_label)
         
         # Options group
-        self.options_group = QGroupBox("Update Options")
+        self.options_group = QGroupBox(self.get_translation('update_options', 'Update Options'))
         options_layout = QVBoxLayout()
         
         # Create a button group for radio buttons
         self.scope_group = QButtonGroup(self)
         
         # All images option (default)
-        self.all_images_radio = QRadioButton("All Images")
+        self.all_images_radio = QRadioButton(self.get_translation('all_images', 'All Images'))
         self.all_images_radio.setChecked(True)
         self.scope_group.addButton(self.all_images_radio, 1)
         options_layout.addWidget(self.all_images_radio)
         
         # Current folder option
-        self.current_folder_radio = QRadioButton("Current Folder Only")
+        self.current_folder_radio = QRadioButton(self.get_translation('current_folder_only', 'Current Folder Only'))
         self.scope_group.addButton(self.current_folder_radio, 2)
         options_layout.addWidget(self.current_folder_radio)
         
@@ -79,7 +95,7 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         layout.addWidget(self.progress_bar)
         
         # Status label
-        self.status_label = QLabel("Ready to update dimensions")
+        self.status_label = QLabel(self.get_translation('ready_status', 'Ready to update dimensions'))
         layout.addWidget(self.status_label)
         
         # Buttons
@@ -88,8 +104,8 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         button_box.rejected.connect(self.reject)
         
         # Rename the buttons
-        button_box.button(QDialogButtonBox.StandardButton.Ok).setText("Start Update")
-        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Close")
+        button_box.button(QDialogButtonBox.StandardButton.Ok).setText(self.get_translation('start_update', 'Start Update'))
+        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(self.get_translation('close', 'Close'))
         
         layout.addWidget(button_box)
         
@@ -143,8 +159,8 @@ class DatabaseDimensionsUpdateDialog(QDialog):
             if not current_folder_id:
                 QMessageBox.warning(
                     self,
-                    "No Folder Selected",
-                    "Please select a folder before updating dimensions for the current folder.",
+                    self.get_translation('no_folder_title', 'No Folder Selected'),
+                    self.get_translation('no_folder_message', 'Please select a folder before updating dimensions for the current folder.'),
                     QMessageBox.StandardButton.Ok
                 )
                 self.start_button.setEnabled(True)
@@ -159,7 +175,7 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         self.update_thread.start()
         
         # Update status
-        self.status_label.setText("Updating image dimensions...")
+        self.status_label.setText(self.get_translation('updating_status', 'Updating image dimensions...'))
         
     @pyqtSlot(int, int)
     def update_progress(self, current, total):
@@ -172,7 +188,7 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         if total > 0:
             percent = int((current / total) * 100)
             self.progress_bar.setValue(percent)
-            self.status_label.setText(f"Processed {current} of {total} images...")
+            self.status_label.setText(self.get_translation('progress_status', 'Processed {current} of {total} images...').format(current=current, total=total))
         
     @pyqtSlot(dict)
     def update_completed(self, results):
@@ -184,20 +200,23 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         self.progress_bar.setValue(100)
         
         # Build status message
-        status = (
-            f"Update complete: {results['updated_count']} images updated, "
-            f"{results['failed_count']} failed, {results['not_found_count']} not found"
+        status = self.get_translation('completion_status',
+            'Update complete: {updated} images updated, {failed} failed, {not_found} not found'
+        ).format(
+            updated=results['updated_count'],
+            failed=results['failed_count'],
+            not_found=results['not_found_count']
         )
         self.status_label.setText(status)
         
         # Change close button text
-        self.close_button.setText("Close")
+        self.close_button.setText(self.get_translation('close', 'Close'))
         
         # Show completion message
         QMessageBox.information(
             self,
-            "Update Complete",
-            f"Image dimensions update completed.\n\n{status}",
+            self.get_translation('update_complete_title', 'Update Complete'),
+            self.get_translation('update_complete_message', 'Image dimensions update completed.\n\n{status}').format(status=status),
             QMessageBox.StandardButton.Ok
         )
         
@@ -208,7 +227,7 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         Args:
             error_message (str): Error message
         """
-        self.status_label.setText(f"Error: {error_message}")
+        self.status_label.setText(self.get_translation('error_status', 'Error: {message}').format(message=error_message))
         
         # Re-enable start button
         self.start_button.setEnabled(True)
@@ -217,7 +236,7 @@ class DatabaseDimensionsUpdateDialog(QDialog):
         # Show error message
         QMessageBox.critical(
             self,
-            "Update Error",
-            f"An error occurred while updating image dimensions:\n{error_message}",
+            self.get_translation('update_error_title', 'Update Error'),
+            self.get_translation('update_error_message', 'An error occurred while updating image dimensions:\n{message}').format(message=error_message),
             QMessageBox.StandardButton.Ok
         )

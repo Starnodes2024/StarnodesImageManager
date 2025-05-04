@@ -68,22 +68,38 @@ class OptimizationThread(QThread):
 class DatabaseOptimizationDialog(QDialog):
     """Dialog for optimizing the database for large image collections."""
     
-    def __init__(self, db_manager, parent=None):
+    def __init__(self, db_manager, parent=None, language_manager=None):
         """Initialize the database optimization dialog.
         
         Args:
             db_manager: Database manager instance
             parent (QWidget, optional): Parent widget
+            language_manager: Language manager instance
         """
         super().__init__(parent)
         
         self.db_manager = db_manager
+        self.language_manager = language_manager
         self.optimization_thread = None
         
-        self.setWindowTitle("Database Optimization")
+        self.setWindowTitle(self.get_translation('dialog_title', 'Database Optimization'))
         self.setMinimumSize(500, 400)
         
         self.setup_ui()
+    
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the db_optimization section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('db_optimization', key, default)
+        return default
     
     def setup_ui(self):
         """Set up the dialog UI."""
@@ -91,15 +107,16 @@ class DatabaseOptimizationDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # Info label
-        info_label = QLabel(
+        info_text = self.get_translation('info_text', 
             "This tool will optimize the database for better performance with large image collections. "
             "The optimization process may take several minutes depending on the size of your database."
         )
+        info_label = QLabel(info_text)
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
         # Database stats
-        self.stats_label = QLabel("Analyzing database...")
+        self.stats_label = QLabel(self.get_translation('analyzing_database', 'Analyzing database...'))
         layout.addWidget(self.stats_label)
         
         # Progress bar
@@ -109,12 +126,12 @@ class DatabaseOptimizationDialog(QDialog):
         layout.addWidget(self.progress_bar)
         
         # Status label
-        self.status_label = QLabel("Ready to optimize")
+        self.status_label = QLabel(self.get_translation('ready_to_optimize', 'Ready to optimize'))
         layout.addWidget(self.status_label)
         
         # Log output
-        log_label = QLabel("Optimization Log:")
-        layout.addWidget(log_label)
+        log_group = QLabel(self.get_translation('optimization_log', 'Optimization Log:'))
+        layout.addWidget(log_group)
         
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -124,17 +141,19 @@ class DatabaseOptimizationDialog(QDialog):
         # Buttons
         button_layout = QHBoxLayout()
         
-        self.start_button = QPushButton("Start Optimization")
+        # Start button
+        self.start_button = QPushButton(self.get_translation('start_optimization', 'Start Optimization'))
         self.start_button.clicked.connect(self.start_optimization)
         button_layout.addWidget(self.start_button)
         
-        self.close_button = QPushButton("Close")
-        self.close_button.clicked.connect(self.reject)
+        # Close button
+        self.close_button = QPushButton(self.get_translation('close', 'Close'))
+        self.close_button.clicked.connect(self.accept)
         button_layout.addWidget(self.close_button)
         
         layout.addLayout(button_layout)
         
-        # Initialize database stats
+        # Update database stats
         self.update_database_stats()
     
     def update_database_stats(self):
@@ -145,26 +164,17 @@ class DatabaseOptimizationDialog(QDialog):
                 self.stats_label.setText("Error: Failed to connect to database")
                 return
             
-            # Get image count
-            self.db_manager.cursor.execute("SELECT COUNT(*) FROM images")
-            image_count = self.db_manager.cursor.fetchone()[0]
-            
-            # Get folder count
-            self.db_manager.cursor.execute("SELECT COUNT(*) FROM folders")
-            folder_count = self.db_manager.cursor.fetchone()[0]
-            
-            # Get database file size
-            db_size_mb = 0
-            if os.path.exists(self.db_manager.db_path):
-                db_size_mb = os.path.getsize(self.db_manager.db_path) / (1024 * 1024)
+            # Get database statistics
+            stats = self.db_manager.get_database_stats()
             
             # Update stats label
-            self.stats_label.setText(
-                f"Current Database Statistics:\n"
-                f"- Total Images: {image_count}\n"
-                f"- Total Folders: {folder_count}\n"
-                f"- Database Size: {db_size_mb:.2f} MB"
+            stats_text = self.get_translation('database_statistics', 'Database Statistics:\n- Total Images: {images}\n- Total Folders: {folders}\n- Database Size: {size} MB')
+            stats_text = stats_text.format(
+                images=stats['total_images'],
+                folders=stats['total_folders'],
+                size=f"{stats['database_size_mb']:.2f}"
             )
+            self.stats_label.setText(stats_text)
             
         except Exception as e:
             logger.error(f"Error getting database stats: {e}")
@@ -174,14 +184,14 @@ class DatabaseOptimizationDialog(QDialog):
     
     def start_optimization(self):
         """Start the database optimization process."""
-        # Disable start button
+        # Disable buttons during optimization
         self.start_button.setEnabled(False)
         self.close_button.setEnabled(False)
         
-        # Clear log
+        # Reset progress
+        self.progress_bar.setValue(0)
+        self.status_label.setText(self.get_translation('starting_optimization', 'Starting optimization...'))
         self.log_output.clear()
-        
-        # Log start
         self.log_message("Starting database optimization...")
         
         # Create and start optimization thread
@@ -226,49 +236,50 @@ class DatabaseOptimizationDialog(QDialog):
         if success:
             # Update progress
             self.progress_bar.setValue(100)
-            self.status_label.setText("Optimization completed successfully")
+            self.status_label.setText(self.get_translation('optimization_completed', 'Optimization completed successfully'))
             
             # Log success
-            self.log_message("Database optimization completed successfully")
+            self.log_message(self.get_translation('optimization_success', 'Database optimization completed successfully'))
             
             # Log statistics
             total_images = stats.get("total_images", 0)
             total_folders = stats.get("total_folders", 0)
             db_size_mb = stats.get("database_size_mb", 0)
             
-            self.log_message(f"Total images: {total_images}")
-            self.log_message(f"Total folders: {total_folders}")
-            self.log_message(f"Database size: {db_size_mb:.2f} MB")
+            self.log_message(self.get_translation('total_images', 'Total images: {count}').format(count=total_images))
+            self.log_message(self.get_translation('total_folders', 'Total folders: {count}').format(count=total_folders))
+            self.log_message(self.get_translation('database_size', 'Database size: {size} MB').format(size=f"{db_size_mb:.2f}"))
             
             # Update stats label
-            self.stats_label.setText(
-                f"Database Statistics After Optimization:\n"
-                f"- Total Images: {total_images}\n"
-                f"- Total Folders: {total_folders}\n"
-                f"- Database Size: {db_size_mb:.2f} MB"
+            stats_text = self.get_translation('database_statistics_after', 'Database Statistics After Optimization:\n- Total Images: {images}\n- Total Folders: {folders}\n- Database Size: {size} MB')
+            stats_text = stats_text.format(
+                images=total_images,
+                folders=total_folders,
+                size=f"{db_size_mb:.2f}"
             )
+            self.stats_label.setText(stats_text)
             
             # Show success message
             QMessageBox.information(
                 self,
-                "Optimization Complete",
-                "Database has been optimized for large image collections.",
+                self.get_translation('optimization_complete_title', 'Optimization Complete'),
+                self.get_translation('optimization_complete_message', 'Database has been optimized for large image collections.'),
                 QMessageBox.StandardButton.Ok
             )
         else:
             # Update progress
             self.progress_bar.setValue(0)
-            self.status_label.setText("Optimization failed")
+            self.status_label.setText(self.get_translation('optimization_failed', 'Optimization failed'))
             
             # Log error
-            error_msg = stats.get("error", "Unknown error")
-            self.log_message(f"Optimization failed: {error_msg}")
+            error_msg = stats.get("error", self.get_translation('unknown_error', 'Unknown error'))
+            self.log_message(self.get_translation('optimization_failed_log', 'Optimization failed: {error}').format(error=error_msg))
             
             # Show error message
             QMessageBox.critical(
                 self,
-                "Optimization Failed",
-                f"Failed to optimize database: {error_msg}",
+                self.get_translation('optimization_failed_title', 'Optimization Failed'),
+                self.get_translation('optimization_failed_message', 'Failed to optimize database: {error}').format(error=error_msg),
                 QMessageBox.StandardButton.Ok
             )
         
@@ -287,8 +298,8 @@ class DatabaseOptimizationDialog(QDialog):
             # Ask for confirmation
             response = QMessageBox.question(
                 self,
-                "Optimization in Progress",
-                "Database optimization is still in progress. Are you sure you want to cancel?",
+                self.get_translation('optimization_in_progress_title', 'Optimization in Progress'),
+                self.get_translation('optimization_in_progress_message', 'Database optimization is still in progress. Are you sure you want to cancel?'),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )

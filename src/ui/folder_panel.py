@@ -26,6 +26,21 @@ class FolderPanel(QWidget):
     folder_removed = pyqtSignal(int)  # Signal emitted when a folder is removed (folder_id)
     add_folder_requested = pyqtSignal()  # Signal to request adding a new folder
     
+    def get_translation(self, section, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            section (str): Section in the translations
+            key (str): Key in the section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if self.language_manager:
+            return self.language_manager.get_translation(section, key, default)
+        return default
+    
     def __init__(self, db_manager, parent=None):
         """Initialize the folder panel.
         
@@ -36,6 +51,15 @@ class FolderPanel(QWidget):
         super().__init__(parent)
         
         self.db_manager = db_manager
+        
+        # Try to get language manager from parent window
+        self.language_manager = None
+        parent_widget = self
+        while parent_widget.parent() is not None:
+            parent_widget = parent_widget.parent()
+            if hasattr(parent_widget, 'language_manager'):
+                self.language_manager = parent_widget.language_manager
+                break
         
         self.setup_ui()
         self.refresh_folders()
@@ -86,7 +110,7 @@ class FolderPanel(QWidget):
             container_layout.addWidget(banner_label)
             
             # GitHub link with themed color
-            github_link = QLabel(f'<a href="https://github.com/Starnodes2024/StarnodesImageManager" style="color:{banner_link_color};">Vers 1.0.0 Visit Github</a>')
+            github_link = QLabel(f'<a href="https://github.com/Starnodes2024/StarnodesImageManager" style="color:{banner_link_color};">Vers 1.1.0 Visit Github</a>')
             github_link.setOpenExternalLinks(True)
             github_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
             github_link.setStyleSheet(f"color: {banner_link_color};")
@@ -100,13 +124,14 @@ class FolderPanel(QWidget):
         
         # Header
         header_layout = QHBoxLayout()
-        header_label = QLabel("Folders")
-        header_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(header_label)
+        # Use folder_panel section for translations to match the updated language files
+        self.header_label = QLabel(self.get_translation('folder_panel', 'title', 'Folders'))
+        self.header_label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(self.header_label)
         
         # Add New Folder button
         self.add_folder_button = QPushButton("+")
-        self.add_folder_button.setToolTip("Add New Folder")
+        self.add_folder_button.setToolTip(self.get_translation('folder_panel', 'add', 'Add New Folder'))
         self.add_folder_button.setFixedSize(30, 30)  # Increased size for better visibility
         self.add_folder_button.setStyleSheet("""
             QPushButton {
@@ -238,19 +263,24 @@ class FolderPanel(QWidget):
         # Create context menu
         menu = QMenu()
         
-        # Add actions
-        scan_action = menu.addAction("Scan Folder")
+        # Add actions - use the correct translation keys
+        # Log for debugging
+        logger.debug(f"Language manager exists: {self.language_manager is not None}")
+        if self.language_manager:
+            logger.debug(f"Current language: {self.language_manager.current_language}")
+        
+        scan_action = menu.addAction(self.get_translation('folder_panel', 'scan', 'Scan Folder'))
         
         menu.addSeparator()
         
         if enabled:
-            enable_action = menu.addAction("Disable Folder")
+            enable_action = menu.addAction(self.get_translation('folder_panel', 'disable', 'Disable Folder'))
         else:
-            enable_action = menu.addAction("Enable Folder")
+            enable_action = menu.addAction(self.get_translation('folder_panel', 'enable', 'Enable Folder'))
         
         menu.addSeparator()
         
-        remove_action = menu.addAction("Remove Folder")
+        remove_action = menu.addAction(self.get_translation('folder_panel', 'remove', 'Remove Folder'))
         
         # Show menu and get selected action
         action = menu.exec(self.folder_tree.mapToGlobal(position))
@@ -292,8 +322,9 @@ class FolderPanel(QWidget):
         """
         # Confirm removal
         confirm = QMessageBox.question(
-            self, "Confirm Removal", 
-            "Are you sure you want to remove this folder from monitoring? All image records for this folder will be deleted from the database.",
+            self, 
+            self.get_translation('folders', 'confirm_removal_title', 'Confirm Removal'), 
+            self.get_translation('folders', 'confirm_removal_message', 'Are you sure you want to remove this folder from monitoring? All image records for this folder will be deleted from the database.'),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -312,8 +343,9 @@ class FolderPanel(QWidget):
             self.refresh_folders()
         else:
             QMessageBox.critical(
-                self, "Error", 
-                "Failed to remove folder from database.",
+                self, 
+                self.get_translation('common', 'error', 'Error'), 
+                self.get_translation('folders', 'remove_failed', 'Failed to remove folder from database.'),
                 QMessageBox.StandardButton.Ok
             )
     

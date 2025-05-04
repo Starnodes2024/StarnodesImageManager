@@ -559,6 +559,48 @@ class Database:
             return conn
         return None
         
+    def close_all_connections(self):
+        """Force close all database connections.
+        
+        This is used before database repair operations to ensure all connections
+        are properly closed so the database file can be replaced.
+        
+        Returns:
+            bool: True if successful
+        """
+        logger.info("Forcing close of all database connections...")
+        
+        try:
+            # Create a temporary connection to release locks
+            temp_conn = None
+            try:
+                # Connect with a short timeout to avoid hanging
+                temp_conn = sqlite3.connect(self.db_path, timeout=1)
+                temp_conn.close()
+            except Exception as e:
+                logger.warning(f"Could not create temporary connection: {e}")
+            finally:
+                if temp_conn:
+                    try:
+                        temp_conn.close()
+                    except:
+                        pass
+            
+            # Force Python's garbage collector to run
+            import gc
+            gc.collect()
+            
+            # On Windows, we need to wait a bit for file locks to be released
+            if os.name == 'nt':
+                time.sleep(0.5)
+                
+            logger.info("All database connections should be closed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error closing all database connections: {e}")
+            return False
+        
     def optimize(self):
         """Optimize the database for better performance.
         

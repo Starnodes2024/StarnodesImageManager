@@ -18,15 +18,17 @@ logger = logging.getLogger("StarImageBrowse.ui.export_dialog")
 class ExportDialog(QDialog):
     """Dialog for selecting export options."""
     
-    def __init__(self, parent=None, num_images=0):
+    def __init__(self, parent=None, num_images=0, language_manager=None):
         """Initialize the export dialog.
         
         Args:
             parent (QWidget, optional): Parent widget
             num_images (int): Number of images being exported
+            language_manager: Language manager instance
         """
         super().__init__(parent)
         
+        self.language_manager = language_manager
         self.num_images = num_images
         self.export_destination = ""
         self.export_format = "original"  # Default to original format
@@ -34,10 +36,24 @@ class ExportDialog(QDialog):
         self.export_workflow = False
         
         self.setup_ui()
+        self.retranslateUi()
+    
+    def get_translation(self, key, default=None):
+        """Get a translation for a key.
+        
+        Args:
+            key (str): Key in the export section
+            default (str, optional): Default value if translation not found
+            
+        Returns:
+            str: Translated string or default value
+        """
+        if hasattr(self, 'language_manager') and self.language_manager:
+            return self.language_manager.translate('export', key, default)
+        return default
     
     def setup_ui(self):
         """Set up the dialog UI."""
-        self.setWindowTitle("Export Options")
         self.setMinimumWidth(400)
         
         # Main layout
@@ -45,18 +61,23 @@ class ExportDialog(QDialog):
         
         # Image count label
         if self.num_images > 0:
-            count_label = QLabel(f"Exporting {self.num_images} image{'s' if self.num_images > 1 else ''}")
-            count_label.setStyleSheet("font-weight: bold;")
-            layout.addWidget(count_label)
+            count_text = self.get_translation('exporting_images', 'Exporting {count} {plural}')
+            count_text = count_text.format(
+                count=self.num_images, 
+                plural=self.get_translation('images' if self.num_images > 1 else 'image', 'images' if self.num_images > 1 else 'image')
+            )
+            self.count_label = QLabel(count_text)
+            self.count_label.setStyleSheet("font-weight: bold;")
+            layout.addWidget(self.count_label)
         
         # Format options
-        format_group = QGroupBox("Export Format")
-        format_layout = QVBoxLayout(format_group)
+        self.format_group = QGroupBox(self.get_translation('format_group', 'Export Format'))
+        format_layout = QVBoxLayout(self.format_group)
         
         # Format radio buttons
-        self.original_radio = QRadioButton("Original Format (preserve original file format)")
-        self.jpg_radio = QRadioButton("JPEG (.jpg)")
-        self.png_radio = QRadioButton("PNG (.png)")
+        self.original_radio = QRadioButton(self.get_translation('original_format', 'Original Format (preserve original file format)'))
+        self.jpg_radio = QRadioButton(self.get_translation('jpeg_format', 'JPEG (.jpg)'))
+        self.png_radio = QRadioButton(self.get_translation('png_format', 'PNG (.png)'))
         
         # Set original format as default
         self.original_radio.setChecked(True)
@@ -66,14 +87,14 @@ class ExportDialog(QDialog):
         format_layout.addWidget(self.jpg_radio)
         format_layout.addWidget(self.png_radio)
         
-        layout.addWidget(format_group)
+        layout.addWidget(self.format_group)
         
         # Description options
-        desc_group = QGroupBox("Description Export")
-        desc_layout = QVBoxLayout(desc_group)
+        self.desc_group = QGroupBox(self.get_translation('description_group', 'Description Export'))
+        desc_layout = QVBoxLayout(self.desc_group)
         
-        self.include_desc_check = QCheckBox("Include description as text file")
-        self.desc_only_check = QCheckBox("Export description only (no image)")
+        self.include_desc_check = QCheckBox(self.get_translation('include_description', 'Include description as text file'))
+        self.desc_only_check = QCheckBox(self.get_translation('description_only', 'Export description only (no image)'))
         
         # Connect checkboxes to handle mutual exclusivity
         self.include_desc_check.stateChanged.connect(self.on_include_desc_changed)
@@ -82,22 +103,22 @@ class ExportDialog(QDialog):
         desc_layout.addWidget(self.include_desc_check)
         desc_layout.addWidget(self.desc_only_check)
         
-        layout.addWidget(desc_group)
+        layout.addWidget(self.desc_group)
         
         # ComfyUI Workflow export option
-        workflow_group = QGroupBox("ComfyUI Workflow Export")
-        workflow_layout = QVBoxLayout(workflow_group)
+        self.workflow_group = QGroupBox(self.get_translation('workflow_group', 'ComfyUI Workflow Export'))
+        workflow_layout = QVBoxLayout(self.workflow_group)
         
-        self.export_workflow_check = QCheckBox("Export ComfyUI workflow as JSON file")
+        self.export_workflow_check = QCheckBox(self.get_translation('export_workflow', 'Export ComfyUI workflow as JSON file'))
         workflow_layout.addWidget(self.export_workflow_check)
         
-        layout.addWidget(workflow_group)
+        layout.addWidget(self.workflow_group)
         
         # Destination button
         dest_layout = QHBoxLayout()
-        self.dest_label = QLabel("Export Destination: Not Selected")
+        self.dest_label = QLabel(self.get_translation('destination_not_selected', 'Export Destination: Not Selected'))
         self.dest_button = QDialogButtonBox(QDialogButtonBox.StandardButton.Open)
-        self.dest_button.button(QDialogButtonBox.StandardButton.Open).setText("Select Destination...")
+        self.dest_button.button(QDialogButtonBox.StandardButton.Open).setText(self.get_translation('select_destination', 'Select Destination...'))
         self.dest_button.button(QDialogButtonBox.StandardButton.Open).clicked.connect(self.select_destination)
         
         dest_layout.addWidget(self.dest_label)
@@ -105,13 +126,59 @@ class ExportDialog(QDialog):
         layout.addLayout(dest_layout)
         
         # Buttons
-        button_box = QDialogButtonBox(
+        self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | 
             QDialogButtonBox.StandardButton.Cancel
         )
-        button_box.accepted.connect(self.validate_and_accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        self.button_box.accepted.connect(self.validate_and_accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def retranslateUi(self):
+        self.setWindowTitle(self.get_translation('dialog_title', 'Export Options'))
+        # Update all UI elements with translated text
+        if hasattr(self, 'count_label') and self.num_images > 0:
+            count_text = self.get_translation('exporting_images', 'Exporting {count} {plural}')
+            count_text = count_text.format(
+                count=self.num_images, 
+                plural=self.get_translation('images' if self.num_images > 1 else 'image', 'images' if self.num_images > 1 else 'image')
+            )
+            self.count_label.setText(count_text)
+        if hasattr(self, 'format_group'):
+            self.format_group.setTitle(self.get_translation('format_group', 'Export Format'))
+        if hasattr(self, 'original_radio'):
+            self.original_radio.setText(self.get_translation('original_format', 'Original Format (preserve original file format)'))
+        if hasattr(self, 'jpg_radio'):
+            self.jpg_radio.setText(self.get_translation('jpeg_format', 'JPEG (.jpg)'))
+        if hasattr(self, 'png_radio'):
+            self.png_radio.setText(self.get_translation('png_format', 'PNG (.png)'))
+        if hasattr(self, 'desc_group'):
+            self.desc_group.setTitle(self.get_translation('description_group', 'Description Export'))
+        if hasattr(self, 'include_desc_check'):
+            self.include_desc_check.setText(self.get_translation('include_description', 'Include description as text file'))
+        if hasattr(self, 'desc_only_check'):
+            self.desc_only_check.setText(self.get_translation('description_only', 'Export description only (no image)'))
+        if hasattr(self, 'workflow_group'):
+            self.workflow_group.setTitle(self.get_translation('workflow_group', 'Workflow Export'))
+        if hasattr(self, 'export_workflow_check'):
+            self.export_workflow_check.setText(self.get_translation('export_workflow', 'Export workflow file'))
+        if hasattr(self, 'dest_label'):
+            if self.export_destination:
+                display_path = self.export_destination
+                if len(display_path) > 40:
+                    display_path = "..." + display_path[-37:]
+                self.dest_label.setText(self.get_translation('destination_selected', 'Export Destination: {path}').format(path=display_path))
+            else:
+                self.dest_label.setText(self.get_translation('select_destination', 'Select export destination folder'))
+        if hasattr(self, 'dest_button'):
+            self.dest_button.button(self.dest_button.StandardButton.Open).setText(self.get_translation('select_destination', 'Select Destination...'))
+        if hasattr(self, 'button_box'):
+            self.button_box.button(self.button_box.StandardButton.Ok).setText(self.get_translation('ok', 'OK'))
+            self.button_box.button(self.button_box.StandardButton.Cancel).setText(self.get_translation('cancel', 'Cancel'))
+
+    def set_language_manager(self, language_manager):
+        self.language_manager = language_manager
+        self.retranslateUi()
     
     def on_include_desc_changed(self, state):
         """Handle changes to the include description checkbox.
@@ -157,15 +224,16 @@ class ExportDialog(QDialog):
             display_path = dest_folder
             if len(display_path) > 40:
                 display_path = "..." + display_path[-37:]
-            self.dest_label.setText(f"Export Destination: {display_path}")
+            self.dest_label.setText(self.get_translation('destination_selected', 'Export Destination: {path}').format(path=display_path))
     
     def validate_and_accept(self):
         """Validate the inputs and accept the dialog."""
         if not self.export_destination:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(
-                self, "Missing Destination", 
-                "Please select an export destination folder.",
+                self, 
+                self.get_translation('missing_destination_title', 'Missing Destination'), 
+                self.get_translation('missing_destination_message', 'Please select an export destination folder.'),
                 QMessageBox.StandardButton.Ok
             )
             return

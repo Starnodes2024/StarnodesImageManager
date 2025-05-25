@@ -109,25 +109,32 @@ class MetadataPanel(QWidget):
         self.info_layout = QFormLayout(self.info_group)
         
         self.filename_label = QLabel()
-        self.info_layout.addRow(QLabel(), self.filename_label)
+        self.filename_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_layout.addRow(self.get_translation('filename', 'Filename:'), self.filename_label)
         
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
-        self.info_layout.addRow(QLabel(), self.path_label)
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_layout.addRow(self.get_translation('path', 'Path:'), self.path_label)
         
         self.size_label = QLabel()
-        self.info_layout.addRow(QLabel(), self.size_label)
+        self.size_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_layout.addRow(self.get_translation('size', 'Size:'), self.size_label)
         
         self.dimensions_label = QLabel()
-        self.info_layout.addRow(QLabel(), self.dimensions_label)
+        self.dimensions_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_layout.addRow(self.get_translation('dimensions', 'Dimensions:'), self.dimensions_label)
         
         self.format_label = QLabel()
+        self.format_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.info_layout.addRow(self.get_translation('format', 'Format:'), self.format_label)
         
         self.date_added_label = QLabel()
+        self.date_added_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.info_layout.addRow(self.get_translation('date_added', 'Date Added:'), self.date_added_label)
         
         self.last_modified_label = QLabel()
+        self.last_modified_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.info_layout.addRow(self.get_translation('last_modified', 'Last Modified:'), self.last_modified_label)
         
         self.container_layout.addWidget(self.info_group)
@@ -140,6 +147,7 @@ class MetadataPanel(QWidget):
         self.description_label.setWordWrap(True)
         self.description_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.description_label.setMinimumHeight(100)
+        self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         description_layout.addWidget(self.description_label)
         
         self.container_layout.addWidget(self.description_group)
@@ -394,7 +402,9 @@ class MetadataPanel(QWidget):
                         metadata[k] = v
             # Only show available metadata
             for k, v in metadata.items():
-                self.all_metadata_layout.addRow(str(k) + ':', QLabel(str(v)))
+                value_label = QLabel(str(v))
+                value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.all_metadata_layout.addRow(str(k) + ':', value_label)
             self.all_metadata_group.setVisible(True)
         except Exception as e:
             QMessageBox.critical(self, 
